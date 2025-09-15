@@ -57,7 +57,7 @@ public class AsyncEmailService {
             return CompletableFuture.completedFuture(true);
 
         } catch (Exception e) {
-            log.error("❌ Failed to send OTP email to {}: {}", toEmail, e.getMessage(), e);
+            log.error("Failed to send OTP email to {}: {}", toEmail, e.getMessage(), e);
             return CompletableFuture.completedFuture(false);
         }
     }
