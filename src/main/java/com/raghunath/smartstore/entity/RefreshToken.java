@@ -1,40 +1,36 @@
 package com.raghunath.smartstore.entity;
 
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.mongodb.core.mapping.Document;
 
-@Document(collection = "refresh_tokens")
-public class RefreshToken {
+import java.time.LocalDateTime;
 
+@Data
+@Document(collection = "refresh_tokens")
+@NoArgsConstructor
+@AllArgsConstructor
+public class RefreshToken {
     @Id
     private String id;
+
     private String email;
     private String token;
 
-    public RefreshToken() {
-        // No-arg constructor needed for MongoDB
-    }
+    @CreatedDate
+    private LocalDateTime createdAt;
 
+    @LastModifiedDate
+    private LocalDateTime updatedAt;
+
+    // Constructor for creating new refresh token
     public RefreshToken(String email, String token) {
         this.email = email;
         this.token = token;
-    }
-
-    //  Getters
-    public String getEmail() {
-        return email;
-    }
-
-    public String getToken() {
-        return token;
-    }
-
-    //  Setters
-    public void setEmail(String email) {
-        this.email = email;
-    }
-
-    public void setToken(String token) {
-        this.token = token;
+        // Don't set createdAt manually - @CreatedDate will handle it
     }
 }

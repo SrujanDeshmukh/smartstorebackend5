@@ -7,4 +7,10 @@ import java.util.Optional;
 
 public interface UserRepository extends MongoRepository<User, String> {
     Optional<User> findByEmail(String email);
+    Optional<User> findByMobileNumber(String mobileNumber);
+
+    // New methods for enhanced functionality
+    long countByIsActiveTrue();
+    long countByFailedLoginAttemptsGreaterThanEqual(int attempts);
 }
+
