@@ -1,6 +1,7 @@
 package com.raghunath.smartstore.controller;
 
 import com.raghunath.smartstore.dto.EmailRequest;
+import com.raghunath.smartstore.dto.OtpVerificationRequest;
 import com.raghunath.smartstore.service.OtpService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -13,6 +14,8 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -120,42 +123,24 @@ public class OtpController {
      * @return Response with verification status
      */
     @PostMapping("/verify-otp")
-    public ResponseEntity<Map<String, Object>> verifyOtp(
-            @RequestParam @Email(message = "Invalid email format") String email,
-            @RequestParam @NotBlank @Pattern(regexp = "\\d{4}", message = "OTP must be 4 digits") String otp) {
-
-        Map<String, Object> response = new HashMap<>();
-
+    public ResponseEntity<Map<String, Object>> verifyOtp(@RequestBody OtpVerificationRequest request) {
         try {
-            log.info("OTP verification request for email: {}", email);
+            OtpService.OtpVerificationResult result = otpService.verifyOtp(request.getEmail(), request.getOtp());
 
-            // ✅ FIX: Use OtpVerificationResult instead of boolean
-            OtpService.OtpVerificationResult result = otpService.verifyOtp(email, otp);
+            Map<String, Object> response = new HashMap<>();
+            response.put("status", result.isSuccess() ? "success" : "error");
+            response.put("message", result.getMessage());
+            response.put("verified", result.isSuccess());
+            response.put("email", request.getEmail().toLowerCase());
+            response.put("timestamp", LocalDateTime.now());
 
-            if (result.isSuccess()) {
-                response.put("status", "success");
-                response.put("message", result.getMessage());
-                response.put("email", email);
-                response.put("verified", true);
-
-                log.info("✅ OTP verification successful for email: {}", email);
-                return ResponseEntity.ok(response);
-            } else {
-                response.put("status", "error");
-                response.put("message", result.getMessage());
-                response.put("email", email);
-                response.put("verified", false);
-
-                log.warn("❌ OTP verification failed for email {}: {}", email, result.getMessage());
-                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
-            }
-
+            return ResponseEntity.ok(response);
         } catch (Exception e) {
-            log.error("Error verifying OTP for {}: {}", email, e.getMessage());
-            response.put("status", "error");
-            response.put("message", "OTP verification failed. Please try again.");
-            response.put("verified", false);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("status", "error");
+            errorResponse.put("message", "OTP verification failed");
+            errorResponse.put("verified", false);
+            return ResponseEntity.badRequest().body(errorResponse);
         }
     }
 

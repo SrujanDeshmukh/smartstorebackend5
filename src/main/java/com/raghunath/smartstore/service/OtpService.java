@@ -43,15 +43,20 @@ public class OtpService {
      * @return Success message
      */
     public String sendOtp(String email) {
-        int validityMinutes = appProperties.getOtp().getValidityMinutes();
         try {
-            // Validate email format
-            if (!isValidEmail(email)) {
+            log.info("Processing OTP request for email: {}", email);
+
+            // Enhanced email validation and normalization
+            String normalizedEmail = normalizeAndValidateEmail(email);
+            if (normalizedEmail == null) {
+                log.warn("Email validation failed for: {}", email);
                 return "Invalid email format";
             }
 
+            log.info("Email normalized to: {}", normalizedEmail);
+
             // Check for existing OTP and cooldown period
-            String cooldownCheck = checkResendCooldown(email);
+            String cooldownCheck = checkResendCooldown(normalizedEmail);
             if (!cooldownCheck.equals("OK")) {
                 return cooldownCheck;
             }
@@ -60,32 +65,32 @@ public class OtpService {
             String otp = generateOtp();
 
             // Delete any existing OTP for this email (resend logic)
-            otpRepository.deleteByEmail(email);
+            otpRepository.deleteByEmail(normalizedEmail);
 
             // Create and save new OTP record
             OtpRecord otpRecord = new OtpRecord();
-            otpRecord.setEmail(email);
+            otpRecord.setEmail(normalizedEmail);
             otpRecord.setOtp(otp);
             otpRecord.setExpirationTime(LocalDateTime.now().plusMinutes(otpValidityMinutes));
-            otpRecord.setAttempts(0); // Reset attempts
+            otpRecord.setAttempts(0);
             otpRecord.setCreatedAt(LocalDateTime.now());
 
             otpRepository.save(otpRecord);
 
             // Send email asynchronously (non-blocking)
-            CompletableFuture<Boolean> emailResult = asyncEmailService.sendHtmlOtpEmailAsync(email, otp);
+            CompletableFuture<Boolean> emailResult = asyncEmailService.sendHtmlOtpEmailAsync(normalizedEmail, otp);
 
             // Handle email result asynchronously
             emailResult.whenComplete((success, throwable) -> {
                 if (success) {
-                    log.info("✅ OTP sent successfully to: {}", email);
+                    log.info("✅ OTP sent successfully to: {}", normalizedEmail);
                 } else {
-                    log.error("❌ Failed to send OTP email to: {}", email);
+                    log.error("❌ Failed to send OTP email to: {}", normalizedEmail);
                 }
             });
 
-            log.info("OTP generated and queued for sending to: {}", email);
-            return "OTP sent successfully"; // Returns immediately due to async processing
+            log.info("OTP generated and queued for sending to: {}", normalizedEmail);
+            return "OTP sent successfully";
 
         } catch (Exception e) {
             log.error("Error in sendOtp for email {}: {}", email, e.getMessage());
@@ -100,7 +105,12 @@ public class OtpService {
      */
     public String resendOtp(String email) {
         try {
-            Optional<OtpRecord> existingOtp = otpRepository.findByEmail(email);
+            String normalizedEmail = normalizeAndValidateEmail(email);
+            if (normalizedEmail == null) {
+                return "Invalid email format";
+            }
+
+            Optional<OtpRecord> existingOtp = otpRepository.findByEmail(normalizedEmail);
 
             if (existingOtp.isPresent()) {
                 OtpRecord record = existingOtp.get();
@@ -114,7 +124,7 @@ public class OtpService {
             }
 
             // Send new OTP
-            return sendOtp(email);
+            return sendOtp(normalizedEmail);
 
         } catch (Exception e) {
             log.error("Error in resendOtp for email {}: {}", email, e.getMessage());
@@ -134,7 +144,13 @@ public class OtpService {
      */
     public OtpVerificationResult verifyOtp(String email, String otp) {
         try {
-            Optional<OtpRecord> recordOpt = otpRepository.findByEmail(email);
+            // Normalize email first
+            String normalizedEmail = normalizeAndValidateEmail(email);
+            if (normalizedEmail == null) {
+                return new OtpVerificationResult(false, "Invalid email format");
+            }
+
+            Optional<OtpRecord> recordOpt = otpRepository.findByEmail(normalizedEmail);
 
             if (recordOpt.isEmpty()) {
                 return new OtpVerificationResult(false, "No OTP found for this email");
@@ -144,13 +160,13 @@ public class OtpService {
 
             // Check if expired
             if (record.getExpirationTime().isBefore(LocalDateTime.now())) {
-                otpRepository.deleteByEmail(email);
+                otpRepository.deleteByEmail(normalizedEmail);
                 return new OtpVerificationResult(false, "OTP has expired. Please request a new one.");
             }
 
             // Check max attempts
             if (record.getAttempts() >= maxOtpAttempts) {
-                otpRepository.deleteByEmail(email);
+                otpRepository.deleteByEmail(normalizedEmail);
                 return new OtpVerificationResult(false, "Maximum verification attempts exceeded. Please request a new OTP.");
             }
 
@@ -160,8 +176,8 @@ public class OtpService {
 
             // Verify OTP
             if (record.getOtp().equals(otp)) {
-                otpRepository.deleteByEmail(email); // One-time use
-                log.info("✅ OTP verified successfully for email: {}", email);
+                otpRepository.deleteByEmail(normalizedEmail); // One-time use
+                log.info("✅ OTP verified successfully for email: {}", normalizedEmail);
                 return new OtpVerificationResult(true, "OTP verified successfully");
             } else {
                 int attemptsLeft = maxOtpAttempts - record.getAttempts();
@@ -188,14 +204,112 @@ public class OtpService {
     }
 
     /**
-     * Validate email format
+     * Normalize and validate email format - FIXED VERSION
      * @param email Email to validate
-     * @return true if valid
+     * @return normalized email or null if invalid
      */
-    private boolean isValidEmail(String email) {
-        return email != null &&
-                email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$") &&
-                email.length() <= 100;
+    private String normalizeAndValidateEmail(String email) {
+        if (email == null || email.trim().isEmpty()) {
+            log.debug("Email is null or empty");
+            return null;
+        }
+
+        // Normalize email to lowercase and trim
+        email = email.toLowerCase().trim();
+        log.debug("Normalized email: {}", email);
+
+        // Basic structure validation
+        if (!hasBasicEmailStructure(email)) {
+            log.debug("Basic email structure validation failed for: {}", email);
+            return null;
+        }
+
+        // Length check
+        if (email.length() > 100) {
+            log.debug("Email too long: {}", email);
+            return null;
+        }
+
+        // Check for obviously fake/test emails only
+        if (isObviouslyFakeEmail(email)) {
+            log.debug("Email flagged as fake/test: {}", email);
+            return null;
+        }
+
+        log.debug("Email validation passed: {}", email);
+        return email;
+    }
+
+    /**
+     * Basic email structure validation - SIMPLIFIED AND WORKING
+     */
+    private boolean hasBasicEmailStructure(String email) {
+        // Must contain @ and .
+        if (!email.contains("@") || !email.contains(".")) {
+            return false;
+        }
+
+        // Split by @
+        String[] parts = email.split("@");
+        if (parts.length != 2) {
+            return false;
+        }
+
+        String username = parts[0];
+        String domain = parts[1];
+
+        // Username checks
+        if (username.length() < 1 || username.length() > 64) {
+            return false;
+        }
+
+        // Domain checks
+        if (domain.length() < 3 || !domain.contains(".")) {
+            return false;
+        }
+
+        // Simple regex for basic email format
+        if (!email.matches("^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$")) {
+            return false;
+        }
+
+        // No consecutive dots
+        if (email.contains("..")) {
+            return false;
+        }
+
+        // No dots at start/end of email
+        if (email.startsWith(".") || email.endsWith(".")) {
+            return false;
+        }
+
+        // No dots immediately before/after @
+        if (email.contains("@.") || email.contains(".@")) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Check for obviously fake emails - VERY MINIMAL BLOCKING
+     */
+    private boolean isObviouslyFakeEmail(String email) {
+        // Only block the most obvious fake emails
+        String[] obviouslyFake = {
+                "test@test.com",
+                "fake@fake.com",
+                "admin@admin.com",
+                "temp@temp.com"
+        };
+
+        for (String fake : obviouslyFake) {
+            if (email.equals(fake)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -226,7 +340,12 @@ public class OtpService {
      */
     public OtpStatusResult getOtpStatus(String email) {
         try {
-            Optional<OtpRecord> recordOpt = otpRepository.findByEmail(email);
+            String normalizedEmail = normalizeAndValidateEmail(email);
+            if (normalizedEmail == null) {
+                return new OtpStatusResult(false, "Invalid email format", 0, 0);
+            }
+
+            Optional<OtpRecord> recordOpt = otpRepository.findByEmail(normalizedEmail);
 
             if (recordOpt.isEmpty()) {
                 return new OtpStatusResult(false, "No OTP found", 0, 0);
