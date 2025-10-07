@@ -32,13 +32,22 @@ public class Vendor {
     @Size(min = 6, message = "Password must be at least 6 characters")
     private String password;
 
-    private String upiId; // For payment reception
+    private String refreshToken;       // Added for refresh token management
+
+    private String upiId;              // For payment reception
 
     private LocalDateTime registeredAt;
+
     private Boolean isVerified = false;
-    private Boolean isActive = true;
+
+    private Boolean isActive = true;   // Object Boolean field
 
     public Vendor() {
         this.registeredAt = LocalDateTime.now();
+    }
+
+    // Explicit getter for primitive boolean isActive()
+    public boolean isActive() {
+        return Boolean.TRUE.equals(this.isActive);
     }
 }

@@ -97,7 +97,7 @@ public class MailtrapEmailService {
             emailData.put("html", htmlContent);
             emailData.put("category", category);
 
-            // Convert to JSON // 
+            // Convert to JSON //
             String jsonPayload = objectMapper.writeValueAsString(emailData);
 
             // Create HTTP request

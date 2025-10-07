@@ -30,7 +30,9 @@ public class EmployeeService {
         employee.setShopId(shopId);
         employee.setEmployeeName(request.getEmployeeName());
         employee.setEmployeeMobile(request.getEmployeeMobile());
-        employee.setEmployeePassword(passwordEncoder.encode(request.getEmployeePassword()));
+        employee.setPassword(passwordEncoder.encode(request.getEmployeePassword()));
+
+        employee.setEmail(request.getEmail());
 
         employeeRepository.save(employee);
         return "Employee added successfully";
@@ -50,8 +52,10 @@ public class EmployeeService {
         Employee employee = getEmployeeById(employeeId);
         employee.setEmployeeName(request.getEmployeeName());
         employee.setEmployeeMobile(request.getEmployeeMobile());
+        employee.setEmail(request.getEmail());
+
         if (request.getEmployeePassword() != null && !request.getEmployeePassword().isEmpty()) {
-            employee.setEmployeePassword(passwordEncoder.encode(request.getEmployeePassword()));
+            employee.setPassword(passwordEncoder.encode(request.getEmployeePassword()));
         }
 
         employeeRepository.save(employee);

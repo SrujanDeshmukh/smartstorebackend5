@@ -5,50 +5,118 @@ import com.raghunath.smartstore.dto.LoginRequest;
 import com.raghunath.smartstore.dto.RegisterRequest;
 import com.raghunath.smartstore.security.JwtUtil;
 import com.raghunath.smartstore.service.AuthService;
+import com.raghunath.smartstore.service.UnifiedAuthService;
+import com.raghunath.smartstore.exception.InvalidCredentialsException;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequestMapping("/auth")
 @RequiredArgsConstructor
 @CrossOrigin(origins = "*")
 public class AuthController {
 
-    private final AuthService authService;
+    private final AuthService authService; // Keep for user registration
+    private final UnifiedAuthService unifiedAuthService; // New unified login service
     private final JwtUtil jwtUtil;
 
-    // Register
+    // ================================
+    // REGISTRATION (Keep separate for now)
+    // ================================
+
     @PostMapping("/register")
-    public ResponseEntity<String> register(@Valid @RequestBody RegisterRequest request){
+    public ResponseEntity<String> register(@Valid @RequestBody RegisterRequest request) {
         return ResponseEntity.ok(authService.register(request));
     }
 
-    // Login
+    // ================================
+    // UNIFIED LOGIN (New Implementation)
+    // ================================
+
     @PostMapping("/login")
-    public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
-        return ResponseEntity.ok(authService.login(request.getEmail(), request.getPassword()));
+    public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request) {
+        try {
+            String email = request.getEmail();
+            String password = request.getPassword();
+            String userType = request.getType(); // USER, VENDOR, or EMPLOYEE
+
+            log.info("🔐 Login attempt - Email: {}, Type: {}", email, userType);
+
+            AuthResponse authResponse = unifiedAuthService.login(email, password, userType);
+
+            return ResponseEntity.ok(authResponse);
+
+        } catch (InvalidCredentialsException e) {
+            log.warn("❌ Login failed: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of(
+                            "success", false,
+                            "message", e.getMessage(),
+                            "error", "INVALID_CREDENTIALS"
+                    ));
+        } catch (Exception e) {
+            log.error("❌ Login error: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of(
+                            "success", false,
+                            "message", "Login failed. Please try again.",
+                            "error", "INTERNAL_ERROR"
+                    ));
+        }
     }
 
-    // Refresh Access Token
+    // ================================
+    // UNIFIED LOGOUT (New Implementation)
+    // ================================
+
+    @PostMapping("/logout")
+    public ResponseEntity<?> logout(@RequestHeader("Authorization") String token) {
+        try {
+            String actualToken = token.startsWith("Bearer ") ? token.substring(7) : token;
+            String email = jwtUtil.extractUsername(actualToken);
+
+            // Extract user type from JWT token
+            String userType = jwtUtil.extractClaim(actualToken,
+                    claims -> claims.get("role", String.class));
+
+            unifiedAuthService.logout(email, userType);
+
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "Logged out successfully"
+            ));
+
+        } catch (Exception e) {
+            log.error("Logout error: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of(
+                            "success", false,
+                            "message", "Logout failed",
+                            "error", e.getMessage()
+                    ));
+        }
+    }
+
+    // ================================
+    // TOKEN REFRESH (Keep existing)
+    // ================================
+
     @PostMapping("/refresh")
     public ResponseEntity<?> refreshToken(@RequestParam String refreshToken) {
         try {
-            // Validate refresh token
             if (!jwtUtil.isTokenValid(refreshToken)) {
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                         .body(Map.of("error", "Invalid or expired refresh token"));
             }
 
-            // Extract user email from refresh token
             String email = jwtUtil.extractUsername(refreshToken);
-
-            // Verify it's actually a refresh token (not access token)
             String tokenType = jwtUtil.extractClaim(refreshToken,
                     claims -> claims.get("type", String.class));
 
@@ -57,12 +125,11 @@ public class AuthController {
                         .body(Map.of("error", "Invalid token type"));
             }
 
-            // Generate new tokens
-            String newAccessToken = jwtUtil.generateAccessToken(email, "USER");
-            String newRefreshToken = jwtUtil.generateRefreshToken(email);
+            String role = jwtUtil.extractClaim(refreshToken,
+                    claims -> claims.get("role", String.class));
 
-            // Update refresh token in database
-            authService.updateRefreshToken(email, newRefreshToken);
+            String newAccessToken = jwtUtil.generateAccessToken(email, role != null ? role : "USER");
+            String newRefreshToken = jwtUtil.generateRefreshToken(email);
 
             return ResponseEntity.ok(new AuthResponse(newAccessToken, newRefreshToken));
 
@@ -70,14 +137,5 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "Token refresh failed: " + e.getMessage()));
         }
-    }
-
-
-    @PostMapping("/logout")
-    public ResponseEntity<String> logout(@RequestHeader("Authorization") String token){
-        String actualToken = token.startsWith("Bearer ") ? token.substring(7) : token;
-        String email = jwtUtil.extractUsername(actualToken);
-        authService.logout(email);
-        return ResponseEntity.ok("Logged out successfully");
     }
 }

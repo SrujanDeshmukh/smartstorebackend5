@@ -1,5 +1,6 @@
 package com.raghunath.smartstore.dto;
 
+import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import lombok.Data;
@@ -14,4 +15,8 @@ public class EmployeeRequest {
 
     @NotBlank(message = "Employee password is required")
     private String employeePassword;
+
+    @Email(message = "Invalid email format")
+    @NotBlank(message = "Email is required")
+    private String email;  // Added email field
 }
