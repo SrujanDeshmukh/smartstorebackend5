@@ -38,8 +38,8 @@ public class MailtrapEmailService {
     @Async
     public CompletableFuture<Boolean> sendOtpEmail(String toEmail, String otp) {
         try {
-            String subject = "SmartStore24 OTP Verification";
-            String htmlContent = createOtpEmailTemplate(otp);
+            String subject = "SmartStore24 - Email Verification Code";
+            String htmlContent = createSimpleOtpEmailTemplate(otp);
 
             boolean sent = sendEmail(toEmail, subject, htmlContent, "OTP_VERIFICATION");
 
@@ -53,6 +53,25 @@ public class MailtrapEmailService {
 
         } catch (Exception e) {
             log.error("Failed to send OTP email to {}: {}", toEmail, e.getMessage());
+            return CompletableFuture.completedFuture(false);
+        }
+    }
+
+    @Async
+    public CompletableFuture<Boolean> sendCustomEmail(String toEmail, String subject, String htmlContent, String category) {
+        try {
+            boolean sent = sendEmail(toEmail, subject, htmlContent, category);
+
+            if (sent) {
+                log.info("✅ Custom email ({}) sent successfully to: {}", category, toEmail);
+            } else {
+                log.error("❌ Failed to send custom email ({}) to: {}", category, toEmail);
+            }
+
+            return CompletableFuture.completedFuture(sent);
+
+        } catch (Exception e) {
+            log.error("Failed to send custom email ({}) to {}: {}", category, toEmail, e.getMessage());
             return CompletableFuture.completedFuture(false);
         }
     }
@@ -78,7 +97,7 @@ public class MailtrapEmailService {
             emailData.put("html", htmlContent);
             emailData.put("category", category);
 
-            // Convert to JSON
+            // Convert to JSON // 
             String jsonPayload = objectMapper.writeValueAsString(emailData);
 
             // Create HTTP request
@@ -109,42 +128,44 @@ public class MailtrapEmailService {
         }
     }
 
-    private String createOtpEmailTemplate(String otp) {
+    private String createSimpleOtpEmailTemplate(String otp) {
         return String.format("""
             <html>
             <head>
                 <style>
-                    .container { max-width: 600px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif; }
-                    .header { background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }
-                    .content { background: #f8f9fa; padding: 30px; border-radius: 0 0 10px 10px; }
-                    .otp-box { background: white; border: 2px dashed #007bff; padding: 20px; margin: 20px 0; text-align: center; border-radius: 10px; }
-                    .otp-code { font-size: 36px; font-weight: bold; color: #007bff; letter-spacing: 8px; margin: 10px 0; }
-                    .footer { text-align: center; margin-top: 20px; color: #6c757d; font-size: 12px; }
+                    body {
+                        font-family: Arial, sans-serif;
+                        font-size: 14px;
+                        line-height: 1.6;
+                        color: #333333;
+                        margin: 0;
+                        padding: 20px;
+                        background-color: #ffffff;
+                    }
+                    .email-content {
+                        max-width: 600px;
+                        margin: 0 auto;
+                    }
+                    p {
+                        margin: 10px 0;
+                    }
                 </style>
             </head>
             <body>
-                <div class="container">
-                    <div class="header">
-                        <h1>SmartStore24</h1>
-                        <p>OTP Verification</p>
-                    </div>
-                    <div class="content">
-                        <h2>Your verification code is ready!</h2>
-                        <p>Use this One-Time Password to complete your SmartStore24 verification:</p>
-                        
-                        <div class="otp-box">
-                            <div class="otp-code">%s</div>
-                            <p style="margin: 0; color: #6c757d;">Enter this code in the app</p>
-                        </div>
-                        
-                        <p><strong>⏰ This OTP expires in 5 minutes</strong></p>
-                        <p>If you didn't request this code, please ignore this email.</p>
-                        
-                        <div class="footer">
-                            <p>This email was sent from SmartStore24</p>
-                            <p>Secure • Fast • Reliable</p>
-                        </div>
-                    </div>
+                <div class="email-content">
+                    <p>Dear Customer,</p>
+                    
+                    <p>Your SmartStore24 verification code is: <strong>%s</strong></p>
+                    
+                    <p>This code is valid for 5 minutes only.<br>
+                    Please do not share this code with anyone for security reasons.</p>
+                    
+                    <p>If you did not request this code, please ignore this email.</p>
+                    
+                    <p>Thank you,<br>
+                    SmartStore24 Support Team</p>
+                    
+                    <p><small>This is an automated message. Please do not reply to this email.</small></p>
                 </div>
             </body>
             </html>
