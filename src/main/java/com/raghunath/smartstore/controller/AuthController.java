@@ -223,7 +223,7 @@ public class AuthController {
                     .body(Map.of(
                             "success", false,
                             "error", "INTERNAL_ERROR",
-                            "message", "Token refresh failed. Please try again."
+                            "message", "Token refresh failed. Please try again"
                     ));
         }
     }
