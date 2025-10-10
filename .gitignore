@@ -32,5 +32,103 @@ build/
 ### VS Code ###
 .vscode/
 
-#Environment variables
+# ================================
+# ENVIRONMENT & CONFIGURATION FILES
+# ================================
 .env
+.env.local
+.env.dev
+.env.prod
+.env.production
+.env.staging
+.env.test
+
+# Application properties with sensitive data
+application-dev.properties
+application-prod.properties
+application-local.properties
+application-staging.properties
+
+# ================================
+# SECURITY & CREDENTIALS
+# ================================
+*.key
+*.pem
+*.p12
+*.jks
+secrets/
+credentials/
+
+# ================================
+# LOGS & TEMPORARY FILES
+# ================================
+logs/
+*.log
+*.log.*
+*.tmp
+*.temp
+temp/
+tmp/
+
+# ================================
+# DATABASE FILES
+# ================================
+*.db
+*.sqlite
+*.sqlite3
+data/
+database/
+
+# ================================
+# OS SPECIFIC FILES
+# ================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ================================
+# BUILD & DEPLOYMENT FILES
+# ================================
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+dist/
+deploy/
+
+# ================================
+# BACKUP FILES
+# ================================
+*.bak
+*.backup
+*.old
+*~
+
+# ================================
+# PACKAGE MANAGER FILES
+# ================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ================================
+# TESTING FILES
+# ================================
+coverage/
+test-results/
+*.coverage
+.nyc_output
+
+# ================================
+# DOCUMENTATION DRAFTS
+# ================================
+*.draft
+docs/drafts/

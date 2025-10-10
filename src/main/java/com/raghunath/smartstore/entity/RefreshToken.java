@@ -7,6 +7,7 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.index.Indexed;
 
 import java.time.LocalDateTime;
 
@@ -18,8 +19,14 @@ public class RefreshToken {
     @Id
     private String id;
 
+    @Indexed
     private String email;
+
+    @Indexed(unique = true)
     private String token;
+
+    @Indexed
+    private String userType; // "USER", "VENDOR", "EMPLOYEE"
 
     @CreatedDate
     private LocalDateTime createdAt;
@@ -27,10 +34,22 @@ public class RefreshToken {
     @LastModifiedDate
     private LocalDateTime updatedAt;
 
+    @Indexed(expireAfter = "7d") // Auto-delete after 7 days
+    private LocalDateTime expiresAt;
+
     // Constructor for creating new refresh token
     public RefreshToken(String email, String token) {
         this.email = email;
         this.token = token;
-        // Don't set createdAt manually - @CreatedDate will handle it
+        this.userType = "USER"; // Default type
+        this.expiresAt = LocalDateTime.now().plusDays(7);
+    }
+
+    // Constructor with user type
+    public RefreshToken(String email, String token, String userType) {
+        this.email = email;
+        this.token = token;
+        this.userType = userType;
+        this.expiresAt = LocalDateTime.now().plusDays(7);
     }
 }

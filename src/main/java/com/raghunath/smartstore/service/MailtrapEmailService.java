@@ -155,7 +155,7 @@ public class MailtrapEmailService {
                 <div class="email-content">
                     <p>Dear Customer,</p>
                     
-                    <p>Your SmartStore24 verification code is: <strong>%s</strong></p>
+                    <p>Your SmartStore24 verification code is: <strong style="font-size: 18px; color: #000000;">%s</strong></p>
                     
                     <p>This code is valid for 5 minutes only.<br>
                     Please do not share this code with anyone for security reasons.</p>

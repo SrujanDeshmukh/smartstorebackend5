@@ -3,6 +3,8 @@ package com.raghunath.smartstore.controller;
 import com.raghunath.smartstore.dto.AuthResponse;
 import com.raghunath.smartstore.dto.LoginRequest;
 import com.raghunath.smartstore.dto.RegisterRequest;
+import com.raghunath.smartstore.entity.RefreshToken;
+import com.raghunath.smartstore.repository.RefreshTokenRepository;
 import com.raghunath.smartstore.security.JwtUtil;
 import com.raghunath.smartstore.service.AuthService;
 import com.raghunath.smartstore.service.UnifiedAuthService;
@@ -23,8 +25,9 @@ import java.util.Map;
 @CrossOrigin(origins = "*")
 public class AuthController {
 
-    private final AuthService authService; // Keep for user registration
-    private final UnifiedAuthService unifiedAuthService; // New unified login service
+    private final AuthService authService;
+    private final UnifiedAuthService unifiedAuthService;
+    private final RefreshTokenRepository refreshTokenRepository;
     private final JwtUtil jwtUtil;
 
     // ================================
@@ -105,37 +108,123 @@ public class AuthController {
     }
 
     // ================================
-    // TOKEN REFRESH (Keep existing)
+    // TOKEN REFRESH (UPDATED WITH USER TYPE SUPPORT)
     // ================================
 
     @PostMapping("/refresh")
-    public ResponseEntity<?> refreshToken(@RequestParam String refreshToken) {
+    public ResponseEntity<?> refreshToken(@Valid @RequestBody Map<String, String> request) {
         try {
+            String refreshToken = request.get("refreshToken");
+
+            if (refreshToken == null || refreshToken.trim().isEmpty()) {
+                log.warn("❌ Refresh token request with empty token");
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(Map.of(
+                                "success", false,
+                                "error", "MISSING_TOKEN",
+                                "message", "Refresh token is required"
+                        ));
+            }
+
             if (!jwtUtil.isTokenValid(refreshToken)) {
+                log.warn("❌ Invalid or expired refresh token provided");
                 return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                        .body(Map.of("error", "Invalid or expired refresh token"));
+                        .body(Map.of(
+                                "success", false,
+                                "error", "INVALID_TOKEN",
+                                "message", "Invalid or expired refresh token"
+                        ));
             }
 
             String email = jwtUtil.extractUsername(refreshToken);
+            if (email == null || email.trim().isEmpty()) {
+                log.warn("❌ Cannot extract username from refresh token");
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of(
+                                "success", false,
+                                "error", "INVALID_TOKEN_DATA",
+                                "message", "Cannot extract user information from token"
+                        ));
+            }
+
             String tokenType = jwtUtil.extractClaim(refreshToken,
                     claims -> claims.get("type", String.class));
 
             if (!"REFRESH".equals(tokenType)) {
+                log.warn("❌ Invalid token type provided: {}", tokenType);
                 return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                        .body(Map.of("error", "Invalid token type"));
+                        .body(Map.of(
+                                "success", false,
+                                "error", "INVALID_TOKEN_TYPE",
+                                "message", "Invalid token type. Refresh token expected."
+                        ));
             }
 
-            String role = jwtUtil.extractClaim(refreshToken,
-                    claims -> claims.get("role", String.class));
+            // Find stored refresh token
+            RefreshToken storedToken = refreshTokenRepository.findByToken(refreshToken)
+                    .orElseThrow(() -> new RuntimeException("Refresh token not found in database"));
 
-            String newAccessToken = jwtUtil.generateAccessToken(email, role != null ? role : "USER");
+            // Verify email matches
+            if (!storedToken.getEmail().equals(email)) {
+                throw new RuntimeException("Token email mismatch");
+            }
+
+            // Get user type from stored token
+            String userType = storedToken.getUserType();
+            String role = userType != null ? userType : "USER";
+
+            // Generate new tokens
+            String newAccessToken = jwtUtil.generateAccessToken(email, role);
             String newRefreshToken = jwtUtil.generateRefreshToken(email);
 
-            return ResponseEntity.ok(new AuthResponse(newAccessToken, newRefreshToken));
+            // Update refresh token in database
+            refreshTokenRepository.deleteByEmailAndUserType(email, userType);
+            RefreshToken newRefreshTokenEntity = new RefreshToken(email, newRefreshToken, userType);
+            refreshTokenRepository.save(newRefreshTokenEntity);
 
+            log.info("✅ Tokens refreshed successfully for user: {} type: {}", email, userType);
+
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "Tokens refreshed successfully",
+                    "accessToken", newAccessToken,
+                    "refreshToken", newRefreshToken,
+                    "email", email,
+                    "role", role
+            ));
+
+        } catch (io.jsonwebtoken.ExpiredJwtException e) {
+            log.warn("❌ Refresh token expired: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of(
+                            "success", false,
+                            "error", "TOKEN_EXPIRED",
+                            "message", "Refresh token has expired. Please login again."
+                    ));
+        } catch (io.jsonwebtoken.MalformedJwtException e) {
+            log.warn("❌ Malformed refresh token: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of(
+                            "success", false,
+                            "error", "MALFORMED_TOKEN",
+                            "message", "Invalid token format"
+                    ));
+        } catch (io.jsonwebtoken.security.SignatureException e) {
+            log.warn("❌ Invalid token signature: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of(
+                            "success", false,
+                            "error", "INVALID_SIGNATURE",
+                            "message", "Token signature validation failed"
+                    ));
         } catch (Exception e) {
+            log.error("❌ Unexpected error during token refresh: {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Token refresh failed: " + e.getMessage()));
+                    .body(Map.of(
+                            "success", false,
+                            "error", "INTERNAL_ERROR",
+                            "message", "Token refresh failed. Please try again."
+                    ));
         }
     }
 }

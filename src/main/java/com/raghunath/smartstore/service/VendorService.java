@@ -9,11 +9,11 @@ import com.raghunath.smartstore.repository.VendorRepository;
 import com.raghunath.smartstore.security.JwtUtil;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
-import java.util.Optional;
-
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class VendorService {
@@ -24,62 +24,123 @@ public class VendorService {
     private final PasswordEncoder passwordEncoder;
 
     public String register(@Valid VendorRegisterRequest request) {
-        if (vendorRepository.findByEmail(request.getEmail()).isPresent()) {
-            return "Email is already registered";
+        try {
+            log.info("Vendor registration attempt for email: {}", request.getEmail());
+
+            if (vendorRepository.findByEmail(request.getEmail()).isPresent()) {
+                return "Email is already registered";
+            }
+
+            if (!request.getPassword().equals(request.getConfirmPassword())) {
+                return "Passwords do not match";
+            }
+
+            Vendor vendor = new Vendor();
+            vendor.setFullName(request.getFullName());
+            vendor.setEmail(request.getEmail());
+            vendor.setMobile(request.getMobile());
+            vendor.setMobileOptional(request.getMobileOptional());
+            vendor.setPassword(passwordEncoder.encode(request.getPassword()));
+
+            vendorRepository.save(vendor);
+
+            log.info("✅ Vendor registered successfully: {}", vendor.getEmail());
+            return "Vendor registered successfully";
+
+        } catch (Exception e) {
+            log.error("❌ Error during vendor registration for email {}: {}", request.getEmail(), e.getMessage());
+            return "Registration failed. Please try again.";
         }
-
-        if (!request.getPassword().equals(request.getConfirmPassword())) {
-            return "Passwords do not match";
-        }
-
-        Vendor vendor = new Vendor();
-        vendor.setFullName(request.getFullName());
-        vendor.setEmail(request.getEmail());
-        vendor.setMobile(request.getMobile());
-        vendor.setMobileOptional(request.getMobileOptional());
-        vendor.setPassword(passwordEncoder.encode(request.getPassword()));
-
-        vendorRepository.save(vendor);
-        return "Vendor registered successfully";
     }
 
     public AuthResponse login(String email, String password) {
-        Vendor vendor = vendorRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("Invalid email or password"));
+        try {
+            log.info("Vendor login attempt for email: {}", email);
 
-        if (!passwordEncoder.matches(password, vendor.getPassword())) {
-            throw new RuntimeException("Invalid email or password");
+            Vendor vendor = vendorRepository.findByEmail(email)
+                    .orElseThrow(() -> new RuntimeException("Invalid email or password"));
+
+            if (!passwordEncoder.matches(password, vendor.getPassword())) {
+                throw new RuntimeException("Invalid email or password");
+            }
+
+            String accessToken = jwtUtil.generateAccessToken(email, "VENDOR");
+            String refreshToken = jwtUtil.generateRefreshToken(email);
+
+            // Store refresh token with VENDOR type
+            updateRefreshToken(email, refreshToken);
+
+            log.info("✅ Vendor logged in successfully: {}", email);
+            return new AuthResponse(accessToken, refreshToken);
+
+        } catch (Exception e) {
+            log.error("❌ Vendor login failed for email {}: {}", email, e.getMessage());
+            throw e;
         }
+    }
 
-        String accessToken = jwtUtil.generateAccessToken(email, "VENDOR");
-        String refreshToken = jwtUtil.generateRefreshToken(email);
+    /**
+     * Update refresh token for vendor
+     */
+    private void updateRefreshToken(String email, String refreshToken) {
+        try {
+            // Delete old refresh tokens for this vendor
+            refreshTokenRepository.deleteByEmailAndUserType(email, "VENDOR");
 
-        // Store refresh token
-        refreshTokenRepository.deleteByEmail(email);
-        refreshTokenRepository.save(new RefreshToken(email, refreshToken));
+            // Save new refresh token with VENDOR type
+            RefreshToken refreshTokenEntity = new RefreshToken(email, refreshToken, "VENDOR");
+            refreshTokenRepository.save(refreshTokenEntity);
 
-        return new AuthResponse(accessToken, refreshToken);
+            log.debug("✅ Refresh token updated for vendor: {}", email);
+
+        } catch (Exception e) {
+            log.error("❌ Failed to update refresh token for vendor {}: {}", email, e.getMessage());
+            throw new RuntimeException("Failed to update refresh token: " + e.getMessage());
+        }
     }
 
     public AuthResponse refreshAccessToken(String refreshToken) {
-        if (!jwtUtil.isTokenValid(refreshToken)) {
-            throw new RuntimeException("Invalid refresh token");
+        try {
+            if (!jwtUtil.isTokenValid(refreshToken)) {
+                throw new RuntimeException("Invalid refresh token");
+            }
+
+            String email = jwtUtil.extractUsername(refreshToken);
+
+            // Find refresh token with VENDOR type
+            RefreshToken stored = refreshTokenRepository.findByToken(refreshToken)
+                    .orElseThrow(() -> new RuntimeException("Refresh token not found"));
+
+            if (!stored.getEmail().equals(email) || !"VENDOR".equals(stored.getUserType())) {
+                throw new RuntimeException("Invalid refresh token");
+            }
+
+            // Verify vendor still exists
+            vendorRepository.findByEmail(email)
+                    .orElseThrow(() -> new RuntimeException("Vendor not found"));
+
+            String newAccessToken = jwtUtil.generateAccessToken(email, "VENDOR");
+            String newRefreshToken = jwtUtil.generateRefreshToken(email);
+
+            // Update refresh token
+            updateRefreshToken(email, newRefreshToken);
+
+            log.info("✅ Vendor tokens refreshed successfully: {}", email);
+            return new AuthResponse(newAccessToken, newRefreshToken);
+
+        } catch (Exception e) {
+            log.error("❌ Vendor token refresh failed: {}", e.getMessage());
+            throw e;
         }
-
-        String email = jwtUtil.extractUsername(refreshToken);
-        RefreshToken stored = refreshTokenRepository.findByToken(refreshToken)
-                .orElseThrow(() -> new RuntimeException("Refresh token not found"));
-
-        if (!stored.getEmail().equals(email)) {
-            throw new RuntimeException("Invalid refresh token");
-        }
-
-        String newAccessToken = jwtUtil.generateAccessToken(email, "VENDOR");
-        return new AuthResponse(newAccessToken, refreshToken);
     }
 
     public void logout(String email) {
-        refreshTokenRepository.deleteByEmail(email);
+        try {
+            refreshTokenRepository.deleteByEmailAndUserType(email, "VENDOR");
+            log.info("✅ Vendor logged out successfully: {}", email);
+        } catch (Exception e) {
+            log.error("❌ Error during vendor logout for email {}: {}", email, e.getMessage());
+        }
     }
 
     public Vendor getVendorByEmail(String email) {
@@ -88,9 +149,17 @@ public class VendorService {
     }
 
     public String updateUpiId(String email, String upiId) {
-        Vendor vendor = getVendorByEmail(email);
-        vendor.setUpiId(upiId);
-        vendorRepository.save(vendor);
-        return "UPI ID updated successfully";
+        try {
+            Vendor vendor = getVendorByEmail(email);
+            vendor.setUpiId(upiId);
+            vendorRepository.save(vendor);
+
+            log.info("✅ UPI ID updated for vendor: {}", email);
+            return "UPI ID updated successfully";
+
+        } catch (Exception e) {
+            log.error("❌ Error updating UPI ID for vendor {}: {}", email, e.getMessage());
+            throw new RuntimeException("Failed to update UPI ID: " + e.getMessage());
+        }
     }
 }
