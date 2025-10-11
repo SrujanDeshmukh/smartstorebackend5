@@ -23,6 +23,10 @@ public class VendorService {
     private final JwtUtil jwtUtil;
     private final PasswordEncoder passwordEncoder;
 
+    // ================================
+    // VENDOR REGISTRATION (SIMPLE)
+    // ================================
+
     public String register(@Valid VendorRegisterRequest request) {
         try {
             log.info("Vendor registration attempt for email: {}", request.getEmail());
@@ -53,6 +57,10 @@ public class VendorService {
         }
     }
 
+    // ================================
+    // VENDOR LOGIN (FIXED TO STORE TOKEN)
+    // ================================
+
     public AuthResponse login(String email, String password) {
         try {
             log.info("Vendor login attempt for email: {}", email);
@@ -67,7 +75,7 @@ public class VendorService {
             String accessToken = jwtUtil.generateAccessToken(email, "VENDOR");
             String refreshToken = jwtUtil.generateRefreshToken(email);
 
-            // Store refresh token with VENDOR type
+            // ✅ FIX: Store refresh token in database
             updateRefreshToken(email, refreshToken);
 
             log.info("✅ Vendor logged in successfully: {}", email);
@@ -79,8 +87,12 @@ public class VendorService {
         }
     }
 
+    // ================================
+    // TOKEN MANAGEMENT (SIMPLIFIED)
+    // ================================
+
     /**
-     * Update refresh token for vendor
+     * Store refresh token in database
      */
     private void updateRefreshToken(String email, String refreshToken) {
         try {
@@ -91,11 +103,10 @@ public class VendorService {
             RefreshToken refreshTokenEntity = new RefreshToken(email, refreshToken, "VENDOR");
             refreshTokenRepository.save(refreshTokenEntity);
 
-            log.debug("✅ Refresh token updated for vendor: {}", email);
+            log.debug("✅ Refresh token saved for vendor: {}", email);
 
         } catch (Exception e) {
-            log.error("❌ Failed to update refresh token for vendor {}: {}", email, e.getMessage());
-            throw new RuntimeException("Failed to update refresh token: " + e.getMessage());
+            log.error("❌ Failed to save refresh token for vendor {}: {}", email, e.getMessage());
         }
     }
 
@@ -107,7 +118,6 @@ public class VendorService {
 
             String email = jwtUtil.extractUsername(refreshToken);
 
-            // Find refresh token with VENDOR type
             RefreshToken stored = refreshTokenRepository.findByToken(refreshToken)
                     .orElseThrow(() -> new RuntimeException("Refresh token not found"));
 
@@ -134,6 +144,10 @@ public class VendorService {
         }
     }
 
+    // ================================
+    // LOGOUT (SIMPLE)
+    // ================================
+
     public void logout(String email) {
         try {
             refreshTokenRepository.deleteByEmailAndUserType(email, "VENDOR");
@@ -142,6 +156,10 @@ public class VendorService {
             log.error("❌ Error during vendor logout for email {}: {}", email, e.getMessage());
         }
     }
+
+    // ================================
+    // VENDOR MANAGEMENT (SIMPLE)
+    // ================================
 
     public Vendor getVendorByEmail(String email) {
         return vendorRepository.findByEmail(email)

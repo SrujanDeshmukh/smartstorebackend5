@@ -1,9 +1,11 @@
 package com.raghunath.smartstore.service;
 
 import com.raghunath.smartstore.dto.AuthResponse;
+import com.raghunath.smartstore.entity.RefreshToken;
 import com.raghunath.smartstore.entity.User;
 import com.raghunath.smartstore.entity.Vendor;
 import com.raghunath.smartstore.entity.Employee;
+import com.raghunath.smartstore.repository.RefreshTokenRepository;
 import com.raghunath.smartstore.repository.UserRepository;
 import com.raghunath.smartstore.repository.VendorRepository;
 import com.raghunath.smartstore.repository.EmployeeRepository;
@@ -25,6 +27,7 @@ public class UnifiedAuthService {
     private final UserRepository userRepository;
     private final VendorRepository vendorRepository;
     private final EmployeeRepository employeeRepository;
+    private final RefreshTokenRepository refreshTokenRepository; // ✅ Added
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
 
@@ -48,7 +51,6 @@ public class UnifiedAuthService {
     }
 
     private AuthResponse authenticateUser(String email, String password) {
-        // Search in User table
         Optional<User> userOpt = userRepository.findByEmail(email);
 
         if (userOpt.isEmpty()) {
@@ -57,30 +59,25 @@ public class UnifiedAuthService {
 
         User user = userOpt.get();
 
-        // Verify password
         if (!passwordEncoder.matches(password, user.getPassword())) {
             throw new InvalidCredentialsException("Invalid password");
         }
 
-        // Check if user is active
         if (!user.isActive()) {
             throw new AccountInactiveException("User account is inactive");
         }
 
-        // Generate tokens
         String accessToken = jwtUtil.generateAccessToken(user.getEmail(), "USER");
         String refreshToken = jwtUtil.generateRefreshToken(user.getEmail());
 
-        // Update refresh token in database
-        user.setRefreshToken(refreshToken);
-        userRepository.save(user);
+        // ✅ Store refresh token in separate collection
+        storeRefreshToken(user.getEmail(), refreshToken, "USER");
 
         log.info("✅ User login successful: {}", email);
         return new AuthResponse(accessToken, refreshToken, "USER", user, user.getId());
     }
 
     private AuthResponse authenticateVendor(String email, String password) {
-        // Search in Vendor table
         Optional<Vendor> vendorOpt = vendorRepository.findByEmail(email);
 
         if (vendorOpt.isEmpty()) {
@@ -89,30 +86,25 @@ public class UnifiedAuthService {
 
         Vendor vendor = vendorOpt.get();
 
-        // Verify password
         if (!passwordEncoder.matches(password, vendor.getPassword())) {
             throw new InvalidCredentialsException("Invalid password");
         }
 
-        // Check if vendor is active
         if (!vendor.isActive()) {
             throw new AccountInactiveException("Vendor account is inactive");
         }
 
-        // Generate tokens
         String accessToken = jwtUtil.generateAccessToken(vendor.getEmail(), "VENDOR");
         String refreshToken = jwtUtil.generateRefreshToken(vendor.getEmail());
 
-        // Update refresh token in database
-        vendor.setRefreshToken(refreshToken);
-        vendorRepository.save(vendor);
+        // ✅ Store refresh token in separate collection with VENDOR type
+        storeRefreshToken(vendor.getEmail(), refreshToken, "VENDOR");
 
         log.info("✅ Vendor login successful: {}", email);
         return new AuthResponse(accessToken, refreshToken, "VENDOR", vendor, vendor.getId());
     }
 
     private AuthResponse authenticateEmployee(String email, String password) {
-        // Search in Employee table
         Optional<Employee> employeeOpt = employeeRepository.findByEmail(email);
 
         if (employeeOpt.isEmpty()) {
@@ -121,51 +113,46 @@ public class UnifiedAuthService {
 
         Employee employee = employeeOpt.get();
 
-        // Verify password
         if (!passwordEncoder.matches(password, employee.getPassword())) {
             throw new InvalidCredentialsException("Invalid password");
         }
 
-        // Check if employee is active
         if (!employee.isActive()) {
             throw new AccountInactiveException("Employee account is inactive");
         }
 
-        // Generate tokens
         String accessToken = jwtUtil.generateAccessToken(employee.getEmail(), "EMPLOYEE");
         String refreshToken = jwtUtil.generateRefreshToken(employee.getEmail());
 
-        // Update refresh token in database
-        employee.setRefreshToken(refreshToken);
-        employeeRepository.save(employee);
+        // ✅ Store refresh token in separate collection
+        storeRefreshToken(employee.getEmail(), refreshToken, "EMPLOYEE");
 
         log.info("✅ Employee login successful: {}", email);
         return new AuthResponse(accessToken, refreshToken, "EMPLOYEE", employee, employee.getId());
     }
 
+    // ✅ NEW METHOD: Store refresh token in separate collection
+    private void storeRefreshToken(String email, String refreshToken, String userType) {
+        try {
+            // Delete old refresh tokens for this user and type
+            refreshTokenRepository.deleteByEmailAndUserType(email, userType);
+
+            // Create new refresh token entity
+            RefreshToken refreshTokenEntity = new RefreshToken(email, refreshToken, userType);
+            refreshTokenRepository.save(refreshTokenEntity);
+
+            log.debug("✅ Refresh token stored for {} with type: {}", email, userType);
+
+        } catch (Exception e) {
+            log.error("❌ Failed to store refresh token for {}: {}", email, e.getMessage());
+        }
+    }
+
     public void logout(String email, String userType) {
         try {
-            switch (userType.toUpperCase()) {
-                case "VENDOR":
-                    vendorRepository.findByEmail(email).ifPresent(vendor -> {
-                        vendor.setRefreshToken(null);
-                        vendorRepository.save(vendor);
-                    });
-                    break;
-                case "EMPLOYEE":
-                    employeeRepository.findByEmail(email).ifPresent(employee -> {
-                        employee.setRefreshToken(null);
-                        employeeRepository.save(employee);
-                    });
-                    break;
-                case "USER":
-                default:
-                    userRepository.findByEmail(email).ifPresent(user -> {
-                        user.setRefreshToken(null);
-                        userRepository.save(user);
-                    });
-                    break;
-            }
+            // ✅ Delete from refresh_tokens collection instead of entity field
+            refreshTokenRepository.deleteByEmailAndUserType(email, userType);
+
             log.info("✅ {} logout successful: {}", userType, email);
         } catch (Exception e) {
             log.error("Logout failed for {}: {}", email, e.getMessage());
