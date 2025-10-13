@@ -1,4 +1,4 @@
-package com.raghunath.smartstore.dto;
+package com.raghunath.smartstore.dto.auth;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;

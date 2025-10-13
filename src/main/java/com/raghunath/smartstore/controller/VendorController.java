@@ -1,8 +1,9 @@
 package com.raghunath.smartstore.controller;
 
-import com.raghunath.smartstore.dto.AuthResponse;
-import com.raghunath.smartstore.dto.LoginRequest;
-import com.raghunath.smartstore.dto.VendorRegisterRequest;
+import com.raghunath.smartstore.dto.vendor.UpdateVendorProfileRequest;
+import com.raghunath.smartstore.dto.auth.AuthResponse;
+import com.raghunath.smartstore.dto.auth.LoginRequest;
+import com.raghunath.smartstore.dto.vendor.VendorRegisterRequest;
 import com.raghunath.smartstore.entity.Vendor;
 import com.raghunath.smartstore.security.JwtUtil;
 import com.raghunath.smartstore.service.VendorService;
@@ -94,6 +95,32 @@ public class VendorController {
         }
     }
 
+    @GetMapping("/profile")
+    public ResponseEntity<?> getVendorProfile(@RequestHeader("Authorization") String authHeader) {
+        try {
+            String token = authHeader.startsWith("Bearer ") ? authHeader.substring(7) : authHeader;
+            String email = jwtUtil.extractUsername(token);
+            String userType = jwtUtil.extractRole(token);
+
+            if (!"VENDOR".equals(userType)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("success", false, "message", "Only vendors can access vendor profile"));
+            }
+
+            Vendor vendor = vendorService.getVendorByEmail(email);
+
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "vendor", vendor
+            ));
+
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("success", false, "message", "Vendor not found"));
+        }
+    }
+
+
     // ================================
     // TOKEN REFRESH (ENHANCED)
     // ================================
@@ -129,6 +156,44 @@ public class VendorController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(response);
         }
     }
+
+    @PutMapping("/profile/update")
+    public ResponseEntity<?> updateVendorProfile(
+            @RequestHeader("Authorization") String authHeader,
+            @Valid @RequestBody UpdateVendorProfileRequest request) {
+
+        try {
+            // Extract email from JWT token
+            String token = authHeader.startsWith("Bearer ") ? authHeader.substring(7) : authHeader;
+            String email = jwtUtil.extractUsername(token);
+            String userType = jwtUtil.extractRole(token);
+
+            // Validate vendor token
+            if (!"VENDOR".equals(userType)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("success", false, "message", "Only vendors can update vendor profile"));
+            }
+
+            // Update vendor profile
+            Vendor updatedVendor = vendorService.updateVendorProfile(email, request);
+
+            return ResponseEntity.ok(Map.of(
+                    "success", true,
+                    "message", "Vendor profile updated successfully",
+                    "vendor", updatedVendor
+            ));
+
+        } catch (RuntimeException e) {
+            log.error("Vendor profile update failed: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("success", false, "message", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Unexpected error during vendor profile update: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("success", false, "message", "Profile update failed. Please try again."));
+        }
+    }
+
 
     // ================================
     // VENDOR LOGOUT (FIXED)
@@ -168,63 +233,6 @@ public class VendorController {
             response.put("message", "Logout failed");
             response.put("error", "LOGOUT_FAILED");
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
-        }
-    }
-
-    // ================================
-    // VENDOR PROFILE MANAGEMENT (ENHANCED)
-    // ================================
-
-    @GetMapping("/profile")
-    public ResponseEntity<Map<String, Object>> getCurrentVendorProfile(@RequestHeader("Authorization") String token) {
-        Map<String, Object> response = new HashMap<>();
-
-        try {
-            String actualToken = token.startsWith("Bearer ") ? token.substring(7) : token;
-            String email = jwtUtil.extractUsername(actualToken);
-
-            // Validate token role
-            String role = jwtUtil.extractRole(actualToken);
-            if (!"VENDOR".equals(role)) {
-                response.put("success", false);
-                response.put("message", "Access denied. Vendor role required.");
-                response.put("error", "ACCESS_DENIED");
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(response);
-            }
-
-            Vendor vendor = vendorService.getVendorByEmail(email);
-
-            response.put("success", true);
-            response.put("vendor", vendor);
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
-            log.error("❌ Error fetching vendor profile: {}", e.getMessage());
-            response.put("success", false);
-            response.put("message", e.getMessage());
-            response.put("error", "PROFILE_FETCH_FAILED");
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
-        }
-    }
-
-    // Backward compatibility endpoint
-    @GetMapping("/profile/by-email")
-    public ResponseEntity<Map<String, Object>> getVendorProfileByEmail(@RequestParam String email) {
-        Map<String, Object> response = new HashMap<>();
-
-        try {
-            Vendor vendor = vendorService.getVendorByEmail(email);
-
-            response.put("success", true);
-            response.put("vendor", vendor);
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
-            log.error("❌ Error fetching vendor profile for {}: {}", email, e.getMessage());
-            response.put("success", false);
-            response.put("message", e.getMessage());
-            response.put("error", "PROFILE_FETCH_FAILED");
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
         }
     }
 

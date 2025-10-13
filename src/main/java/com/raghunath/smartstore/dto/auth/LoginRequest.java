@@ -1,4 +1,4 @@
-package com.raghunath.smartstore.dto;
+package com.raghunath.smartstore.dto.auth;
 
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
