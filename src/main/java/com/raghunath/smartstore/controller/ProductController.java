@@ -63,6 +63,7 @@ public class ProductController {
         return ResponseEntity.ok(productService.updateProduct(productId, request));
     }
 
+    // some updates
     @DeleteMapping("/{productId}")
     public ResponseEntity<String> deleteProduct(@PathVariable String productId) {
         return ResponseEntity.ok(productService.deleteProduct(productId));
