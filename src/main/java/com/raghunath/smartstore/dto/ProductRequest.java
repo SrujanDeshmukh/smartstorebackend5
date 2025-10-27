@@ -17,4 +17,9 @@ public class ProductRequest {
 
     private String photo;
     private String description; // max 30 words
+    private String imageUrl;
+    private Integer discount;
+    private String Brand;
+    private String Unit;
+    private String Category;
 }

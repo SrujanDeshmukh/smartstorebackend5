@@ -30,8 +30,14 @@ public class ProductService {
         product.setProductName(request.getProductName());
         product.setQuantity(request.getQuantity());
         product.setPrice(request.getPrice());
-        product.setPhoto(request.getPhoto());
+        product.setImageUrl(request.getImageUrl());
         product.setDescription(request.getDescription());
+
+        // Set new fields
+        product.setBrand(request.getBrand());
+        product.setUnit(request.getUnit());
+        product.setDiscount(request.getDiscount());
+        product.setCategory(request.getCategory());
 
         productRepository.save(product);
         return "Product added successfully";
@@ -56,8 +62,15 @@ public class ProductService {
         product.setProductName(request.getProductName());
         product.setQuantity(request.getQuantity());
         product.setPrice(request.getPrice());
-        product.setPhoto(request.getPhoto());
+        product.setImageUrl(request.getImageUrl());
         product.setDescription(request.getDescription());
+
+        // Update new fields
+        product.setBrand(request.getBrand());
+        product.setUnit(request.getUnit());
+        product.setDiscount(request.getDiscount());
+        product.setCategory(request.getCategory());
+
         product.setUpdatedAt(LocalDateTime.now());
 
         productRepository.save(product);

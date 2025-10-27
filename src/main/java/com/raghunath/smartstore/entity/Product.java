@@ -28,9 +28,22 @@ public class Product {
     private Integer quantity;
 
     @NotNull(message = "Price is required")
-    private Double price; // price according to quantity
+    private Double price;
 
-    private String photo; // photo URL/path
+    @NotNull(message = "Discount is required")
+    private Integer discount;
+
+    @NotBlank(message = "Brand is required")
+    private String brand;
+
+    @NotBlank(message = "Unit is required")
+    private String unit;
+
+    @NotBlank(message = "Category is required")
+    private String category;
+
+    private String imageUrl; // updated field for image URL
+
     private String description; // optional, up to 30 words
 
     private Boolean isActive = true;
