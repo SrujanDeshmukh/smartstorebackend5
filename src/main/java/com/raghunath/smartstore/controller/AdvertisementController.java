@@ -26,21 +26,16 @@ public class AdvertisementController {
             @PathVariable String shopId,
             @Valid @RequestBody AdvertisementRequest request) {
 
-        try {
-            String actualToken = token.startsWith("Bearer ") ? token.substring(7) : token;
-            String role = jwtUtil.extractRole(actualToken);
+        String actualToken = token.startsWith("Bearer ") ? token.substring(7) : token;
+        String role = jwtUtil.extractRole(actualToken);
 
-            if (!"VENDOR".equals(role)) {
-                throw new IllegalArgumentException("Access denied. Vendor role required.");
-            }
-
-            String email = jwtUtil.extractUsername(actualToken);
-            String result = advertisementService.createAdvertisement(email, shopId, request);
-            return ResponseEntity.ok(result);
-        } catch (Exception e) {
-            // Exception will be handled by GlobalExceptionHandler
-            throw e;
+        if (!"VENDOR".equals(role)) {
+            throw new IllegalArgumentException("Access denied. Vendor role required.");
         }
+
+        String email = jwtUtil.extractUsername(actualToken);
+        String result = advertisementService.createAdvertisement(email, shopId, request);
+        return ResponseEntity.ok(result);
     }
 
     @GetMapping("/shop/{shopId}")
@@ -55,20 +50,46 @@ public class AdvertisementController {
     }
 
     @GetMapping("/{advertisementId}")
-    public ResponseEntity<Advertisement> getAdvertisement(@PathVariable String advertisementId) {
+    public ResponseEntity<Advertisement> getAdvertisement(
+            @RequestHeader("Authorization") String token,
+            @PathVariable String advertisementId) {
+
+        String actualToken = token.startsWith("Bearer ") ? token.substring(7) : token;
+        String email = jwtUtil.extractUsername(actualToken);
+
         return ResponseEntity.ok(advertisementService.getAdvertisementById(advertisementId));
     }
 
     @PutMapping("/{advertisementId}")
     public ResponseEntity<String> updateAdvertisement(
+            @RequestHeader("Authorization") String token,
             @PathVariable String advertisementId,
             @Valid @RequestBody AdvertisementRequest request) {
 
-        return ResponseEntity.ok(advertisementService.updateAdvertisement(advertisementId, request));
+        String actualToken = token.startsWith("Bearer ") ? token.substring(7) : token;
+        String role = jwtUtil.extractRole(actualToken);
+
+        if (!"VENDOR".equals(role)) {
+            throw new IllegalArgumentException("Access denied. Vendor role required.");
+        }
+
+        String email = jwtUtil.extractUsername(actualToken);
+        return ResponseEntity.ok(advertisementService.updateAdvertisement(email, advertisementId, request));
     }
 
     @DeleteMapping("/{advertisementId}")
-    public ResponseEntity<String> deleteAdvertisement(@PathVariable String advertisementId) {
-        return ResponseEntity.ok(advertisementService.deleteAdvertisement(advertisementId));
+    public ResponseEntity<String> deleteAdvertisement(
+            @RequestHeader("Authorization") String token,
+            @PathVariable String advertisementId) {
+
+        String actualToken = token.startsWith("Bearer ") ? token.substring(7) : token;
+        String role = jwtUtil.extractRole(actualToken);
+
+        if (!"VENDOR".equals(role)) {
+            throw new IllegalArgumentException("Access denied. Vendor role required.");
+        }
+
+        String email = jwtUtil.extractUsername(actualToken);
+        return ResponseEntity.ok(advertisementService.deleteAdvertisement(email, advertisementId));
     }
 }

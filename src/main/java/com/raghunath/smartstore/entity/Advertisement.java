@@ -14,25 +14,36 @@ import java.util.List;
 public class Advertisement {
 
     @Id
-    private String id; // advertisement id
+    private String id;
 
     @NotBlank(message = "Vendor ID is required")
-    private String vendorId; // business vendor id
+    private String vendorId;
 
     @NotBlank(message = "Shop ID is required")
-    private String shopId; // shop id
+    private String shopId;
+
+    @NotBlank(message = "Title is required")
+    private String title;
 
     @NotEmpty(message = "At least one product must be selected")
-    private List<String> productIds; // array of product ids on which offer applies
+    private List<String> productIds;
 
     @NotBlank(message = "Description is required")
-    private String description; // e.g., "50% off"
+    private String description;
 
-    private LocalDateTime offerEndDate;
+    private String imageUrl; // You'll add this manually after designing
+
+    private LocalDateTime startDate;
+    private LocalDateTime endDate;
+
     private Boolean isActive = true;
+    private Boolean isApproved = false; // You'll update this in DB directly
+
     private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
 
     public Advertisement() {
         this.createdAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now();
     }
 }

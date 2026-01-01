@@ -7,7 +7,7 @@ import com.raghunath.smartstore.entity.Shop;
 import com.raghunath.smartstore.entity.Vendor;
 import com.raghunath.smartstore.repository.AdvertisementRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.dao.DuplicateKeyException;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -15,6 +15,7 @@ import java.util.List;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class AdvertisementService {
 
     private final AdvertisementRepository advertisementRepository;
@@ -22,191 +23,219 @@ public class AdvertisementService {
     private final ShopService shopService;
     private final ProductService productService;
 
+    /**
+     * CREATE ADVERTISEMENT
+     */
     public String createAdvertisement(String vendorEmail, String shopId, AdvertisementRequest request) {
         try {
-            // Get vendor by email
-            Vendor vendor = vendorService.getVendorByEmail(vendorEmail);
+            log.info("Creating advertisement for shop: {}", shopId);
 
-            // Validate shop exists and belongs to vendor
+            // Validate vendor and shop
+            Vendor vendor = vendorService.getVendorByEmail(vendorEmail);
             Shop shop = shopService.getShopById(shopId);
+
             if (!shop.getVendorId().equals(vendor.getId())) {
                 throw new IllegalArgumentException("Shop does not belong to this vendor");
             }
 
-            // Validate shop is active
             if (!shop.getIsActive()) {
                 throw new IllegalArgumentException("Cannot create advertisement for inactive shop");
             }
 
-            // Validate all product IDs exist and belong to this shop
+            // Validate date range
+            if (request.getEndDate().isBefore(request.getStartDate())) {
+                throw new IllegalArgumentException("End date must be after start date");
+            }
+
+            if (request.getStartDate().isBefore(LocalDateTime.now())) {
+                throw new IllegalArgumentException("Start date must be in the future");
+            }
+
+            // Validate products
             List<String> productIds = request.getProductIds();
             if (productIds == null || productIds.isEmpty()) {
-                throw new IllegalArgumentException("At least one product must be selected for advertisement");
+                throw new IllegalArgumentException("At least one product must be selected");
             }
 
             for (String productId : productIds) {
-                try {
-                    Product product = productService.getProductById(productId);
-                    if (!product.getShopId().equals(shopId)) {
-                        throw new IllegalArgumentException("Product " + productId + " does not belong to this shop");
-                    }
-                    if (!product.getIsActive()) {
-                        throw new IllegalArgumentException("Cannot create advertisement for inactive product: " + productId);
-                    }
-                } catch (RuntimeException e) {
-                    throw new IllegalArgumentException("Invalid product ID: " + productId + ". " + e.getMessage());
+                Product product = productService.getProductById(productId);
+                if (!product.getShopId().equals(shopId)) {
+                    throw new IllegalArgumentException("Product " + productId + " does not belong to this shop");
+                }
+                if (!product.getIsActive()) {
+                    throw new IllegalArgumentException("Cannot add inactive product: " + productId);
                 }
             }
 
-            // Validate offer end date
-            if (request.getOfferEndDate() != null && request.getOfferEndDate().isBefore(LocalDateTime.now())) {
-                throw new IllegalArgumentException("Offer end date must be in the future");
-            }
-
-            // Create new advertisement
+            // Create advertisement
             Advertisement advertisement = new Advertisement();
             advertisement.setVendorId(vendor.getId());
             advertisement.setShopId(shopId);
-            advertisement.setProductIds(request.getProductIds());
+            advertisement.setTitle(request.getTitle());
+            advertisement.setProductIds(productIds);
             advertisement.setDescription(request.getDescription());
-            advertisement.setOfferEndDate(request.getOfferEndDate());
+            advertisement.setStartDate(request.getStartDate());
+            advertisement.setEndDate(request.getEndDate());
+            advertisement.setIsActive(true);
+            advertisement.setIsApproved(false);
 
-            // Save advertisement
             advertisementRepository.save(advertisement);
-            return "Advertisement created successfully";
 
-        } catch (DuplicateKeyException e) {
-            throw new DuplicateKeyException("Advertisement already exists with the same configuration: " + e.getMessage(), e);
+            log.info("Advertisement created successfully with ID: {}", advertisement.getId());
+            return "Advertisement created successfully. It will be reviewed and approved soon.";
+
         } catch (IllegalArgumentException e) {
-            throw e; // Re-throw validation errors
-        } catch (RuntimeException e) {
-            throw new RuntimeException("Failed to create advertisement: " + e.getMessage(), e);
+            throw e;
         } catch (Exception e) {
-            throw new RuntimeException("Unexpected error occurred while creating advertisement: " + e.getMessage(), e);
+            log.error("Error creating advertisement: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to create advertisement: " + e.getMessage(), e);
         }
     }
 
+    /**
+     * GET VENDOR'S ADVERTISEMENTS FOR A SHOP
+     */
     public List<Advertisement> getShopAdvertisements(String vendorEmail, String shopId) {
         try {
             Vendor vendor = vendorService.getVendorByEmail(vendorEmail);
-
-            // Validate shop belongs to vendor
             Shop shop = shopService.getShopById(shopId);
+
             if (!shop.getVendorId().equals(vendor.getId())) {
                 throw new IllegalArgumentException("Shop does not belong to this vendor");
             }
 
-            return advertisementRepository.findByVendorIdAndShopIdAndIsActive(vendor.getId(), shopId, true);
-        } catch (RuntimeException e) {
-            throw new RuntimeException("Failed to retrieve shop advertisements: " + e.getMessage(), e);
+            return advertisementRepository.findByVendorIdAndShopId(vendor.getId(), shopId);
+
+        } catch (Exception e) {
+            log.error("Error retrieving shop advertisements: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to retrieve advertisements", e);
         }
     }
 
+    /**
+     * GET SINGLE ADVERTISEMENT BY ID
+     */
     public Advertisement getAdvertisementById(String advertisementId) {
-        if (advertisementId == null || advertisementId.trim().isEmpty()) {
-            throw new IllegalArgumentException("Advertisement ID cannot be null or empty");
-        }
-
         return advertisementRepository.findById(advertisementId)
                 .orElseThrow(() -> new RuntimeException("Advertisement not found with ID: " + advertisementId));
     }
 
-    public String updateAdvertisement(String advertisementId, AdvertisementRequest request) {
+    /**
+     * UPDATE ADVERTISEMENT
+     */
+    public String updateAdvertisement(String vendorEmail, String advertisementId, AdvertisementRequest request) {
         try {
-            Advertisement advertisement = getAdvertisementById(advertisementId);
+            Vendor vendor = vendorService.getVendorByEmail(vendorEmail);
 
-            // Validate product IDs if provided
+            Advertisement advertisement = advertisementRepository.findById(advertisementId)
+                    .orElseThrow(() -> new RuntimeException("Advertisement not found"));
+
+            // Check ownership
+            if (!advertisement.getVendorId().equals(vendor.getId())) {
+                throw new IllegalArgumentException("Advertisement does not belong to this vendor");
+            }
+
+            // Can only update if not approved yet
+            if (advertisement.getIsApproved()) {
+                throw new IllegalArgumentException("Cannot update approved advertisement. Please contact admin.");
+            }
+
+            // Validate and update products
             if (request.getProductIds() != null && !request.getProductIds().isEmpty()) {
                 for (String productId : request.getProductIds()) {
-                    try {
-                        Product product = productService.getProductById(productId);
-                        if (!product.getShopId().equals(advertisement.getShopId())) {
-                            throw new IllegalArgumentException("Product " + productId + " does not belong to this shop");
-                        }
-                        if (!product.getIsActive()) {
-                            throw new IllegalArgumentException("Cannot add inactive product to advertisement: " + productId);
-                        }
-                    } catch (RuntimeException e) {
-                        throw new IllegalArgumentException("Invalid product ID: " + productId + ". " + e.getMessage());
+                    Product product = productService.getProductById(productId);
+                    if (!product.getShopId().equals(advertisement.getShopId())) {
+                        throw new IllegalArgumentException("Product does not belong to this shop");
+                    }
+                    if (!product.getIsActive()) {
+                        throw new IllegalArgumentException("Cannot add inactive product: " + productId);
                     }
                 }
                 advertisement.setProductIds(request.getProductIds());
             }
 
-            // Update description if provided
+            // Update fields
+            if (request.getTitle() != null && !request.getTitle().trim().isEmpty()) {
+                advertisement.setTitle(request.getTitle());
+            }
+
             if (request.getDescription() != null && !request.getDescription().trim().isEmpty()) {
                 advertisement.setDescription(request.getDescription());
             }
 
-            // Update offer end date if provided
-            if (request.getOfferEndDate() != null) {
-                if (request.getOfferEndDate().isBefore(LocalDateTime.now())) {
-                    throw new IllegalArgumentException("Offer end date must be in the future");
+            if (request.getStartDate() != null) {
+                if (request.getStartDate().isBefore(LocalDateTime.now())) {
+                    throw new IllegalArgumentException("Start date must be in the future");
                 }
-                advertisement.setOfferEndDate(request.getOfferEndDate());
+                advertisement.setStartDate(request.getStartDate());
             }
 
+            if (request.getEndDate() != null) {
+                if (request.getEndDate().isBefore(request.getStartDate() != null ?
+                        request.getStartDate() : advertisement.getStartDate())) {
+                    throw new IllegalArgumentException("End date must be after start date");
+                }
+                advertisement.setEndDate(request.getEndDate());
+            }
+
+            advertisement.setUpdatedAt(LocalDateTime.now());
             advertisementRepository.save(advertisement);
+
             return "Advertisement updated successfully";
 
-        } catch (DuplicateKeyException e) {
-            throw new DuplicateKeyException("Advertisement update violates unique constraints: " + e.getMessage(), e);
-        } catch (IllegalArgumentException e) {
-            throw e; // Re-throw validation errors
-        } catch (RuntimeException e) {
-            throw new RuntimeException("Failed to update advertisement: " + e.getMessage(), e);
         } catch (Exception e) {
-            throw new RuntimeException("Unexpected error occurred while updating advertisement: " + e.getMessage(), e);
+            log.error("Error updating advertisement: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to update advertisement", e);
         }
     }
 
-    public String deleteAdvertisement(String advertisementId) {
-        try {
-            Advertisement advertisement = getAdvertisementById(advertisementId);
-            advertisement.setIsActive(false);
-            advertisementRepository.save(advertisement);
-            return "Advertisement deleted successfully";
-        } catch (RuntimeException e) {
-            throw new RuntimeException("Failed to delete advertisement: " + e.getMessage(), e);
-        }
-    }
-
-    // UPDATED HELPER METHODS (Using existing repository methods only)
-
-    public List<Advertisement> getActiveAdvertisementsByVendor(String vendorEmail) {
-        try {
-            Vendor vendor = vendorService.getVendorByEmail(vendorEmail);
-            return advertisementRepository.findByVendorIdAndIsActive(vendor.getId(), true);
-        } catch (RuntimeException e) {
-            throw new RuntimeException("Failed to retrieve vendor advertisements: " + e.getMessage(), e);
-        }
-    }
-
-    public List<Advertisement> getExpiredAdvertisements(String vendorEmail, String shopId) {
+    /**
+     * DELETE ADVERTISEMENT
+     */
+    public String deleteAdvertisement(String vendorEmail, String advertisementId) {
         try {
             Vendor vendor = vendorService.getVendorByEmail(vendorEmail);
 
-            // Validate shop belongs to vendor
-            Shop shop = shopService.getShopById(shopId);
-            if (!shop.getVendorId().equals(vendor.getId())) {
-                throw new IllegalArgumentException("Shop does not belong to this vendor");
+            Advertisement advertisement = advertisementRepository.findById(advertisementId)
+                    .orElseThrow(() -> new RuntimeException("Advertisement not found"));
+
+            // Check ownership
+            if (!advertisement.getVendorId().equals(vendor.getId())) {
+                throw new IllegalArgumentException("Advertisement does not belong to this vendor");
             }
 
-            return advertisementRepository.findByVendorIdAndShopIdAndIsActiveAndOfferEndDateBefore(
-                    vendor.getId(), shopId, true, LocalDateTime.now());
-        } catch (RuntimeException e) {
-            throw new RuntimeException("Failed to retrieve expired advertisements: " + e.getMessage(), e);
+            advertisement.setIsActive(false);
+            advertisement.setUpdatedAt(LocalDateTime.now());
+            advertisementRepository.save(advertisement);
+
+            return "Advertisement deleted successfully";
+
+        } catch (Exception e) {
+            log.error("Error deleting advertisement: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to delete advertisement", e);
         }
     }
 
-    public String activateAdvertisement(String advertisementId) {
+    /**
+     * GET ACTIVE ADVERTISEMENTS FOR SHOP (USER VIEW)
+     */
+    public List<Advertisement> getActiveAdvertisementsForShop(String shopId) {
         try {
-            Advertisement advertisement = getAdvertisementById(advertisementId);
-            advertisement.setIsActive(true);
-            advertisementRepository.save(advertisement);
-            return "Advertisement activated successfully";
-        } catch (RuntimeException e) {
-            throw new RuntimeException("Failed to activate advertisement: " + e.getMessage(), e);
+            LocalDateTime now = LocalDateTime.now();
+
+            // Get active, approved ads within date range and with image
+            List<Advertisement> ads = advertisementRepository
+                    .findByShopIdAndIsActiveAndIsApprovedAndStartDateBeforeAndEndDateAfter(
+                            shopId, true, true, now, now);
+
+            // Filter only ads with images
+            return ads.stream()
+                    .filter(ad -> ad.getImageUrl() != null && !ad.getImageUrl().isEmpty())
+                    .toList();
+
+        } catch (Exception e) {
+            log.error("Error retrieving active advertisements: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to retrieve advertisements", e);
         }
     }
 }
