@@ -71,6 +71,14 @@ public class JwtUtil {
             return false;
         }
     }
+    public boolean isTokenValid(String token, org.springframework.security.core.userdetails.UserDetails userDetails) {
+        String username = extractUsername(token);
+        // Checks that username matches userDetails and the token is still valid in general
+        return (username != null &&
+                username.equals(userDetails.getUsername()) &&
+                isTokenValid(token));
+    }
+
 
     // Check if token is expired without throwing exception
     public boolean isTokenExpired(String token) {

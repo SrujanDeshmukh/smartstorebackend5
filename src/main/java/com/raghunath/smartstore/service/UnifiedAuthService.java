@@ -10,14 +10,19 @@ import com.raghunath.smartstore.repository.UserRepository;
 import com.raghunath.smartstore.repository.VendorRepository;
 import com.raghunath.smartstore.repository.EmployeeRepository;
 import com.raghunath.smartstore.security.JwtUtil;
+import com.raghunath.smartstore.exception.BadRequestException;
 import com.raghunath.smartstore.exception.InvalidCredentialsException;
 import com.raghunath.smartstore.exception.AccountInactiveException;
+import com.raghunath.smartstore.exception.UnauthorizedException;
+import com.raghunath.smartstore.exception.NotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -33,17 +38,20 @@ public class UnifiedAuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
 
-    // ================================
-    // MAIN LOGIN METHOD (Enhanced)
-    // ================================
+    // Lockout configuration
+    private static final int MAX_FAILED_ATTEMPTS = 5;
+    private static final int LOCKOUT_MINUTES = 30;
 
+    // ================================
+    // MAIN LOGIN METHOD (Unified for ALL types)
+    // ================================
     @Transactional
     public AuthResponse login(String email, String password, String userType) {
-        log.info("Attempting login for email: {} as type: {}", email, userType);
+        log.info("🔐 Unified login attempt: {} ({})", email, userType);
 
-        // Normalize inputs
+        validateLoginInput(email, password);
         email = email.toLowerCase().trim();
-        userType = userType.toUpperCase().trim();
+        userType = normalizeUserType(userType);
 
         try {
             return switch (userType) {
@@ -52,231 +60,293 @@ public class UnifiedAuthService {
                 case "USER" -> authenticateUser(email, password);
                 default -> {
                     log.warn("❌ Invalid user type provided: {}", userType);
-                    throw new InvalidCredentialsException("Invalid user type: " + userType);
+                    throw new BadRequestException("Invalid user type: " + userType);
                 }
             };
-        } catch (InvalidCredentialsException | AccountInactiveException e) {
-            log.error("Authentication failed for {}: {}", email, e.getMessage());
+        } catch (InvalidCredentialsException | AccountInactiveException | UnauthorizedException | BadRequestException e) {
+            log.warn("Authentication failed for {}: {}", email, e.getMessage());
             throw e;
         } catch (Exception e) {
-            log.error("Unexpected login error for {}: {}", email, e.getMessage());
+            log.error("Unexpected login error for {}: {}", email, e.getMessage(), e);
             throw new InvalidCredentialsException("Login failed. Please try again.");
         }
     }
 
     // ================================
-    // USER AUTHENTICATION (Enhanced)
+    // USER AUTHENTICATION
     // ================================
-
     private AuthResponse authenticateUser(String email, String password) {
-        Optional<User> userOpt = userRepository.findByEmail(email);
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new InvalidCredentialsException("Invalid email or password"));
 
-        if (userOpt.isEmpty()) {
-            log.debug("User not found with email: {}", email);
-            throw new InvalidCredentialsException("Invalid email or password");
+        if (user.isAccountLocked()) {
+            long remaining = computeRemainingLockMinutes(user.getLastFailedLoginAt(), LOCKOUT_MINUTES);
+            throw new UnauthorizedException(String.format(
+                    "Account temporarily locked due to multiple failed attempts. Try again in %d minutes", remaining));
         }
 
-        User user = userOpt.get();
-
         if (!passwordEncoder.matches(password, user.getPassword())) {
-            log.debug("Invalid password for user: {}", email);
+            recordFailedLoginForUser(user);
             throw new InvalidCredentialsException("Invalid email or password");
         }
 
         if (!user.isActive()) {
-            log.debug("Inactive user attempted login: {}", email);
             throw new AccountInactiveException("User account is inactive. Please contact support.");
         }
 
-        // Generate tokens
+        // Successful login
+        user.updateLastLogin();
+        userRepository.save(user);
+
         String accessToken = jwtUtil.generateAccessToken(user.getEmail(), "USER");
         String refreshToken = jwtUtil.generateRefreshToken(user.getEmail());
 
-        // Store refresh token
-        storeRefreshToken(user.getEmail(), refreshToken, "USER");
+        rotateRefreshToken(user.getEmail(), refreshToken, "USER");
 
         log.info("✅ User login successful: {}", email);
         return new AuthResponse(accessToken, refreshToken, "USER", user, user.getId());
     }
 
     // ================================
-    // VENDOR AUTHENTICATION (Enhanced)
+    // VENDOR AUTHENTICATION
     // ================================
-
     private AuthResponse authenticateVendor(String email, String password) {
-        Optional<Vendor> vendorOpt = vendorRepository.findByEmail(email);
+        Vendor vendor = vendorRepository.findByEmail(email)
+                .orElseThrow(() -> new InvalidCredentialsException("Invalid email or password"));
 
-        if (vendorOpt.isEmpty()) {
-            log.debug("Vendor not found with email: {}", email);
-            throw new InvalidCredentialsException("Invalid email or password");
+        if (vendor.isAccountLocked()) {
+            long remaining = computeRemainingLockMinutes(vendor.getLastFailedLoginAt(), LOCKOUT_MINUTES);
+            throw new UnauthorizedException(String.format(
+                    "Account temporarily locked due to multiple failed attempts. Try again in %d minutes", remaining));
         }
 
-        Vendor vendor = vendorOpt.get();
-
         if (!passwordEncoder.matches(password, vendor.getPassword())) {
-            log.debug("Invalid password for vendor: {}", email);
+            recordFailedLoginForVendor(vendor);
             throw new InvalidCredentialsException("Invalid email or password");
         }
 
         if (!vendor.isActive()) {
-            log.debug("Inactive vendor attempted login: {}", email);
             throw new AccountInactiveException("Vendor account is inactive. Please contact support.");
         }
 
-        // Generate tokens
+        // Check vendor approval (optional - remove if not needed)
+        if (!vendor.isApproved()) {
+            throw new UnauthorizedException("Vendor account is pending admin approval.");
+        }
+
+        // Successful login
+        vendor.updateLastLogin();
+        vendorRepository.save(vendor);
+
         String accessToken = jwtUtil.generateAccessToken(vendor.getEmail(), "VENDOR");
         String refreshToken = jwtUtil.generateRefreshToken(vendor.getEmail());
 
-        // Store refresh token
-        storeRefreshToken(vendor.getEmail(), refreshToken, "VENDOR");
+        rotateRefreshToken(vendor.getEmail(), refreshToken, "VENDOR");
 
         log.info("✅ Vendor login successful: {}", email);
         return new AuthResponse(accessToken, refreshToken, "VENDOR", vendor, vendor.getId());
     }
 
     // ================================
-    // EMPLOYEE AUTHENTICATION (Enhanced)
+    // EMPLOYEE AUTHENTICATION
     // ================================
-
     private AuthResponse authenticateEmployee(String email, String password) {
-        Optional<Employee> employeeOpt = employeeRepository.findByEmail(email);
+        Employee employee = employeeRepository.findByEmail(email)
+                .orElseThrow(() -> new InvalidCredentialsException("Invalid email or password"));
 
-        if (employeeOpt.isEmpty()) {
-            log.debug("Employee not found with email: {}", email);
-            throw new InvalidCredentialsException("Invalid email or password");
+        if (employee.isAccountLocked()) {
+            long remaining = computeRemainingLockMinutes(employee.getLastFailedLoginAt(), LOCKOUT_MINUTES);
+            throw new UnauthorizedException(String.format(
+                    "Account temporarily locked due to multiple failed attempts. Try again in %d minutes", remaining));
         }
 
-        Employee employee = employeeOpt.get();
-
         if (!passwordEncoder.matches(password, employee.getPassword())) {
-            log.debug("Invalid password for employee: {}", email);
+            recordFailedLoginForEmployee(employee);
             throw new InvalidCredentialsException("Invalid email or password");
         }
 
         if (!employee.isActive()) {
-            log.debug("Inactive employee attempted login: {}", email);
             throw new AccountInactiveException("Employee account is inactive. Please contact support.");
         }
 
-        // Generate tokens
+        // Successful login
+        employee.updateLastLogin();
+        employeeRepository.save(employee);
+
         String accessToken = jwtUtil.generateAccessToken(employee.getEmail(), "EMPLOYEE");
         String refreshToken = jwtUtil.generateRefreshToken(employee.getEmail());
 
-        // Store refresh token
-        storeRefreshToken(employee.getEmail(), refreshToken, "EMPLOYEE");
+        rotateRefreshToken(employee.getEmail(), refreshToken, "EMPLOYEE");
 
         log.info("✅ Employee login successful: {}", email);
         return new AuthResponse(accessToken, refreshToken, "EMPLOYEE", employee, employee.getId());
     }
 
     // ================================
-    // TOKEN MANAGEMENT (Enhanced)
+    // TOKEN REFRESH
     // ================================
+    @Transactional
+    public AuthResponse refreshAccessToken(String refreshToken) {
+        validateRefreshToken(refreshToken);
 
-    /**
-     * Store refresh token in separate collection with enhanced error handling
-     */
-    private void storeRefreshToken(String email, String refreshToken, String userType) {
-        try {
-            email = email.toLowerCase().trim();
-            log.debug("Storing refresh token for user: {} with type: {}", email, userType);
+        log.debug("🔄 Unified token refresh");
 
-            // Clean up old tokens using compatible approach
-            List<RefreshToken> existingTokens = refreshTokenRepository.findByEmailAndUserType(email, userType);
-
-            if (!existingTokens.isEmpty()) {
-                refreshTokenRepository.deleteAll(existingTokens);
-                log.debug("Deleted {} existing refresh tokens for user: {}", existingTokens.size(), email);
-            }
-
-            // Create and save new refresh token
-            RefreshToken refreshTokenEntity = new RefreshToken(email, refreshToken, userType);
-            refreshTokenRepository.save(refreshTokenEntity);
-
-            log.debug("✅ Refresh token stored successfully for {} with type: {}", email, userType);
-
-        } catch (Exception e) {
-            log.error("❌ Failed to store refresh token for {}: {}", email, e.getMessage());
-            // Don't throw exception here - login should succeed even if token storage fails
+        if (!jwtUtil.isTokenValid(refreshToken) || !jwtUtil.validateRefreshToken(refreshToken)) {
+            throw new UnauthorizedException("Invalid or expired refresh token");
         }
+
+        String email = jwtUtil.extractUsername(refreshToken);
+        RefreshToken stored = refreshTokenRepository.findByToken(refreshToken)
+                .orElseThrow(() -> new UnauthorizedException("Refresh token not found"));
+
+        if (!stored.getEmail().equals(email)) {
+            throw new UnauthorizedException("Token email mismatch");
+        }
+
+        String userType = stored.getUserType();
+        Object userData = getUserByEmailAndType(email, userType)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
+        if (!isUserActiveByEmail(email, userType)) {
+            throw new UnauthorizedException("User account is deactivated");
+        }
+
+        String newAccessToken = jwtUtil.generateAccessToken(email, userType);
+        String newRefreshToken = jwtUtil.generateRefreshToken(email);
+
+        rotateRefreshToken(email, newRefreshToken, userType);
+
+        log.info("✅ Tokens refreshed: {} ({})", email, userType);
+        return new AuthResponse(newAccessToken, newRefreshToken, userType, userData, getUserId(userData));
     }
 
     // ================================
-    // LOGOUT FUNCTIONALITY (Enhanced)
+    // LOGOUT
     // ================================
-
-    /**
-     * Logout user from current device by invalidating refresh tokens
-     */
     @Transactional
     public void logout(String email, String userType) {
+        email = email.toLowerCase().trim();
+        userType = normalizeUserType(userType);
+
+        log.info("🔓 Unified logout: {} ({})", email, userType);
+
         try {
-            email = email.toLowerCase().trim();
-            log.info("Processing logout for user: {} with type: {}", email, userType);
-
-            // Find and delete refresh tokens using compatible approach
-            List<RefreshToken> tokensToDelete = refreshTokenRepository.findByEmailAndUserType(email, userType);
-
-            if (!tokensToDelete.isEmpty()) {
-                refreshTokenRepository.deleteAll(tokensToDelete);
-                log.info("✅ {} logout successful: {} (deleted {} tokens)", userType, email, tokensToDelete.size());
-            } else {
-                log.warn("⚠️ No refresh tokens found to delete for user: {} ({})", email, userType);
-            }
-
+            refreshTokenRepository.deleteByEmailAndUserType(email, userType);
         } catch (Exception e) {
-            log.error("❌ Logout failed for {}: {}", email, e.getMessage());
-            // Don't throw exception - logout should be graceful
+            List<RefreshToken> tokens = refreshTokenRepository.findByEmailAndUserType(email, userType);
+            if (!tokens.isEmpty()) refreshTokenRepository.deleteAll(tokens);
         }
+
+        log.info("✅ Logout complete: {} ({})", email, userType);
     }
 
-    /**
-     * Logout user from all devices (all user types)
-     */
     @Transactional
     public void logoutFromAllDevices(String email) {
+        email = email.toLowerCase().trim();
+        log.info("🔓 Unified logout-all: {}", email);
+
         try {
-            email = email.toLowerCase().trim();
-            log.info("Processing logout-all for user: {}", email);
-
-            // Find and delete all refresh tokens for this email
-            List<RefreshToken> tokensToDelete = refreshTokenRepository.findByEmail(email);
-
-            if (!tokensToDelete.isEmpty()) {
-                refreshTokenRepository.deleteAll(tokensToDelete);
-                log.info("✅ User logged out from all devices: {} (deleted {} tokens)", email, tokensToDelete.size());
-            } else {
-                log.warn("⚠️ No refresh tokens found for user: {}", email);
-            }
-
+            refreshTokenRepository.deleteByEmail(email);
         } catch (Exception e) {
-            log.error("❌ Logout-all failed for {}: {}", email, e.getMessage());
-            // Don't throw exception - logout should be graceful
+            List<RefreshToken> tokens = refreshTokenRepository.findByEmail(email);
+            if (!tokens.isEmpty()) refreshTokenRepository.deleteAll(tokens);
+        }
+
+        log.info("✅ Logout-all complete: {}", email);
+    }
+
+    // ================================
+    // FAILED LOGIN HANDLERS
+    // ================================
+    private void recordFailedLoginForUser(User user) {
+        try {
+            user.recordFailedLogin();
+            userRepository.save(user);
+            log.debug("Recorded failed login for user: {} (attempts={})", user.getEmail(), user.getFailedLoginAttempts());
+        } catch (Exception e) {
+            log.warn("Failed to record failed login for user {}: {}", user.getEmail(), e.getMessage());
+        }
+    }
+
+    private void recordFailedLoginForVendor(Vendor vendor) {
+        try {
+            vendor.recordFailedLogin();
+            vendorRepository.save(vendor);
+            log.debug("Recorded failed login for vendor: {} (attempts={})", vendor.getEmail(), vendor.getFailedLoginAttempts());
+        } catch (Exception e) {
+            log.warn("Failed to record failed login for vendor {}: {}", vendor.getEmail(), e.getMessage());
+        }
+    }
+
+    private void recordFailedLoginForEmployee(Employee employee) {
+        try {
+            employee.recordFailedLogin();
+            employeeRepository.save(employee);
+            log.debug("Recorded failed login for employee: {} (attempts={})", employee.getEmail(), employee.getFailedLoginAttempts());
+        } catch (Exception e) {
+            log.warn("Failed to record failed login for employee {}: {}", employee.getEmail(), e.getMessage());
         }
     }
 
     // ================================
-    // USER MANAGEMENT UTILITIES (New)
+    // TOKEN ROTATION
     // ================================
+    private void rotateRefreshToken(String email, String refreshToken, String userType) {
+        try {
+            try {
+                refreshTokenRepository.deleteByEmailAndUserType(email, userType);
+            } catch (Exception e) {
+                List<RefreshToken> existing = refreshTokenRepository.findByEmailAndUserType(email, userType);
+                if (!existing.isEmpty()) refreshTokenRepository.deleteAll(existing);
+            }
 
-    /**
-     * Check if user exists and is active by email and type
-     */
+            RefreshToken entity = new RefreshToken(email, refreshToken, userType);
+            refreshTokenRepository.save(entity);
+
+            log.debug("Stored new refresh token for {} (type={})", email, userType);
+        } catch (Exception e) {
+            log.error("Failed to persist refresh token for {}: {}", email, e.getMessage());
+        }
+    }
+
+    // ================================
+    // VALIDATION METHODS
+    // ================================
+    private void validateLoginInput(String email, String password) {
+        if (email == null || email.trim().isEmpty() || password == null) {
+            throw new BadRequestException("Email and password are required");
+        }
+    }
+
+    private void validateRefreshToken(String refreshToken) {
+        if (refreshToken == null || refreshToken.trim().isEmpty()) {
+            throw new BadRequestException("Refresh token is required");
+        }
+    }
+
+    private String normalizeUserType(String userType) {
+        return (userType == null || userType.trim().isEmpty()) ? "USER" : userType.toUpperCase().trim();
+    }
+
+    private long computeRemainingLockMinutes(LocalDateTime lastFailedAt, int lockMinutes) {
+        if (lastFailedAt == null) return 0;
+        LocalDateTime lockEnd = lastFailedAt.plusMinutes(lockMinutes);
+        if (LocalDateTime.now().isAfter(lockEnd)) return 0;
+        return Math.max(0, Duration.between(LocalDateTime.now(), lockEnd).toMinutes());
+    }
+
+    // ================================
+    // USER MANAGEMENT UTILITIES
+    // ================================
     public boolean isUserActiveByEmail(String email, String userType) {
         try {
             email = email.toLowerCase().trim();
-            userType = userType.toUpperCase().trim();
+            userType = normalizeUserType(userType);
 
             return switch (userType) {
-                case "VENDOR" -> vendorRepository.findByEmail(email)
-                        .map(Vendor::isActive)
-                        .orElse(false);
-                case "EMPLOYEE" -> employeeRepository.findByEmail(email)
-                        .map(Employee::isActive)
-                        .orElse(false);
-                case "USER" -> userRepository.findByEmail(email)
-                        .map(User::isActive)
-                        .orElse(false);
+                case "VENDOR" -> vendorRepository.findByEmail(email).map(Vendor::isActive).orElse(false);
+                case "EMPLOYEE" -> employeeRepository.findByEmail(email).map(Employee::isActive).orElse(false);
+                case "USER" -> userRepository.findByEmail(email).map(User::isActive).orElse(false);
                 default -> false;
             };
         } catch (Exception e) {
@@ -285,13 +355,10 @@ public class UnifiedAuthService {
         }
     }
 
-    /**
-     * Get user information by email and type (for admin purposes)
-     */
     public Optional<Object> getUserByEmailAndType(String email, String userType) {
         try {
             email = email.toLowerCase().trim();
-            userType = userType.toUpperCase().trim();
+            userType = normalizeUserType(userType);
 
             return switch (userType) {
                 case "VENDOR" -> vendorRepository.findByEmail(email).map(v -> (Object) v);
@@ -305,21 +372,25 @@ public class UnifiedAuthService {
         }
     }
 
-    /**
-     * Deactivate user account (soft delete)
-     */
+    private String getUserId(Object userData) {
+        if (userData instanceof Vendor v) return v.getId();
+        if (userData instanceof User u) return u.getId();
+        if (userData instanceof Employee e) return e.getId();
+        return null;
+    }
+
     @Transactional
     public boolean deactivateUser(String email, String userType) {
         try {
             email = email.toLowerCase().trim();
-            userType = userType.toUpperCase().trim();
+            userType = normalizeUserType(userType);
 
             boolean deactivated = switch (userType) {
                 case "VENDOR" -> {
                     Optional<Vendor> vendorOpt = vendorRepository.findByEmail(email);
                     if (vendorOpt.isPresent()) {
                         Vendor vendor = vendorOpt.get();
-                        vendor.setActive(false);
+                        vendor.setIsActive(false);
                         vendorRepository.save(vendor);
                         yield true;
                     }
@@ -329,7 +400,7 @@ public class UnifiedAuthService {
                     Optional<Employee> employeeOpt = employeeRepository.findByEmail(email);
                     if (employeeOpt.isPresent()) {
                         Employee employee = employeeOpt.get();
-                        employee.setActive(false);
+                        employee.setIsActive(false);
                         employeeRepository.save(employee);
                         yield true;
                     }
@@ -339,7 +410,7 @@ public class UnifiedAuthService {
                     Optional<User> userOpt = userRepository.findByEmail(email);
                     if (userOpt.isPresent()) {
                         User user = userOpt.get();
-                        user.setActive(false);
+                        user.setIsActive(false);
                         userRepository.save(user);
                         yield true;
                     }
@@ -349,7 +420,6 @@ public class UnifiedAuthService {
             };
 
             if (deactivated) {
-                // Also logout from all devices
                 logoutFromAllDevices(email);
                 log.info("✅ User deactivated and logged out: {} ({})", email, userType);
             }
@@ -362,12 +432,8 @@ public class UnifiedAuthService {
     }
 
     // ================================
-    // AUTHENTICATION STATISTICS (New)
+    // AUTHENTICATION STATISTICS
     // ================================
-
-    /**
-     * Get authentication statistics
-     */
     public AuthStats getAuthStats() {
         try {
             long totalUsers = userRepository.count();
@@ -375,18 +441,9 @@ public class UnifiedAuthService {
             long totalEmployees = employeeRepository.count();
             long activeTokens = refreshTokenRepository.count();
 
-            // Count active users
-            long activeUsers = userRepository.findAll().stream()
-                    .mapToLong(user -> user.isActive() ? 1L : 0L)
-                    .sum();
-
-            long activeVendors = vendorRepository.findAll().stream()
-                    .mapToLong(vendor -> vendor.isActive() ? 1L : 0L)
-                    .sum();
-
-            long activeEmployees = employeeRepository.findAll().stream()
-                    .mapToLong(employee -> employee.isActive() ? 1L : 0L)
-                    .sum();
+            long activeUsers = userRepository.findAll().stream().mapToLong(u -> u.isActive() ? 1L : 0L).sum();
+            long activeVendors = vendorRepository.findAll().stream().mapToLong(v -> v.isActive() ? 1L : 0L).sum();
+            long activeEmployees = employeeRepository.findAll().stream().mapToLong(e -> e.isActive() ? 1L : 0L).sum();
 
             return new AuthStats(
                     totalUsers, totalVendors, totalEmployees,
@@ -399,34 +456,33 @@ public class UnifiedAuthService {
         }
     }
 
-    /**
-     * Clean up expired or orphaned refresh tokens
-     */
     @Transactional
     public int cleanupTokens() {
         try {
-            // Find all refresh tokens
-            List<RefreshToken> allTokens = refreshTokenRepository.findAll();
-            List<RefreshToken> tokensToDelete = allTokens.stream()
-                    .filter(token -> {
-                        try {
-                            // Check if token is expired or invalid
-                            return !jwtUtil.isTokenValid(token.getToken());
-                        } catch (Exception e) {
-                            // If we can't validate, consider it invalid
-                            return true;
-                        }
-                    })
-                    .toList();
+            LocalDateTime cutoff = LocalDateTime.now().minusDays(30);
+
+            List<RefreshToken> tokensToDelete;
+            try {
+                tokensToDelete = refreshTokenRepository.findExpiredTokens(cutoff);
+            } catch (Exception e) {
+                List<RefreshToken> allTokens = refreshTokenRepository.findAll();
+                tokensToDelete = allTokens.stream()
+                        .filter(t -> {
+                            try {
+                                return !jwtUtil.isTokenValid(t.getToken());
+                            } catch (Exception ex) {
+                                return true;
+                            }
+                        }).toList();
+            }
 
             if (!tokensToDelete.isEmpty()) {
                 refreshTokenRepository.deleteAll(tokensToDelete);
                 log.info("✅ Cleaned up {} expired/invalid refresh tokens", tokensToDelete.size());
             }
-
             return tokensToDelete.size();
         } catch (Exception e) {
-            log.error("❌ Error during token cleanup: {}", e.getMessage());
+            log.error("❌ Error during token cleanup: {}", e.getMessage(), e);
             return 0;
         }
     }
@@ -434,10 +490,6 @@ public class UnifiedAuthService {
     // ================================
     // INNER CLASSES
     // ================================
-
-    /**
-     * Enhanced Authentication Statistics
-     */
     public static class AuthStats {
         private final long totalUsers;
         private final long totalVendors;
@@ -459,7 +511,6 @@ public class UnifiedAuthService {
             this.activeTokens = activeTokens;
         }
 
-        // Getters
         public long getTotalUsers() { return totalUsers; }
         public long getTotalVendors() { return totalVendors; }
         public long getTotalEmployees() { return totalEmployees; }

@@ -1,21 +1,20 @@
 package com.raghunath.smartstore.service;
 
-import com.raghunath.smartstore.dto.auth.AuthResponse;
 import com.raghunath.smartstore.dto.auth.RegisterRequest;
-import com.raghunath.smartstore.entity.RefreshToken;
 import com.raghunath.smartstore.entity.User;
-import com.raghunath.smartstore.repository.RefreshTokenRepository;
+import com.raghunath.smartstore.exception.BadRequestException;
+import com.raghunath.smartstore.exception.NotFoundException;
+import com.raghunath.smartstore.exception.ResourceConflictException;
 import com.raghunath.smartstore.repository.UserRepository;
-import com.raghunath.smartstore.security.JwtUtil;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 @Slf4j
@@ -24,10 +23,9 @@ import java.util.concurrent.CompletableFuture;
 public class AuthService {
 
     private final UserRepository userRepository;
-    private final RefreshTokenRepository refreshTokenRepository;
-    private final JwtUtil jwtUtil;
     private final PasswordEncoder passwordEncoder;
     private final AsyncEmailService asyncEmailService;
+    private final UnifiedAuthService unifiedAuthService;  // ✅ For calling logout after password change
 
     @Value("${app.user.default.role:USER}")
     private String defaultUserRole;
@@ -39,43 +37,53 @@ public class AuthService {
     private int accountLockoutMinutes;
 
     // ================================
-    // USER REGISTRATION
+    // USER REGISTRATION (KEEP AS-IS)
     // ================================
-
     public String register(@Valid RegisterRequest request) {
+        log.info("User registration attempt for email: {}", request.getEmail());
+
+        String email = request.getEmail() == null ? null : request.getEmail().toLowerCase().trim();
+        String mobile = request.getMobileNumber() == null ? null : request.getMobileNumber().trim();
+
+        // Basic validations
+        if (email == null || email.isEmpty()) {
+            throw new BadRequestException("Email is required");
+        }
+        if (mobile == null || mobile.isEmpty()) {
+            throw new BadRequestException("Mobile number is required");
+        }
+        if (request.getPassword() == null || request.getConfirmPassword() == null ||
+                !request.getPassword().equals(request.getConfirmPassword())) {
+            throw new BadRequestException("Passwords do not match");
+        }
+
+        String passwordValidation = validatePassword(request.getPassword());
+        if (!"VALID".equals(passwordValidation)) {
+            throw new BadRequestException(passwordValidation);
+        }
+
+        // Check uniqueness (DB unique index + duplicate key handling is recommended)
+        if (userRepository.findByEmail(email).isPresent()) {
+            log.warn("Registration failed - Email already exists: {}", email);
+            throw new ResourceConflictException("Email is already registered");
+        }
+        if (userRepository.findByMobileNumber(mobile).isPresent()) {
+            log.warn("Registration failed - Mobile number already exists: {}", mobile);
+            throw new ResourceConflictException("Mobile number is already registered");
+        }
+
+        User user = new User();
+        user.setFullName(request.getFullName() == null ? null : request.getFullName().trim());
+        user.setMobileNumber(mobile);
+        user.setEmail(email);
+        user.setPassword(passwordEncoder.encode(request.getPassword()));
+
         try {
-            log.info("User registration attempt for email: {}", request.getEmail());
-
-            if (userRepository.findByEmail(request.getEmail()).isPresent()) {
-                log.warn("Registration failed - Email already exists: {}", request.getEmail());
-                return "Email is already registered";
-            }
-
-            if (userRepository.findByMobileNumber(request.getMobileNumber()).isPresent()) {
-                log.warn("Registration failed - Mobile number already exists: {}", request.getMobileNumber());
-                return "Mobile number is already registered";
-            }
-
-            if (!request.getPassword().equals(request.getConfirmPassword())) {
-                return "Passwords do not match";
-            }
-
-            String passwordValidation = validatePassword(request.getPassword());
-            if (!passwordValidation.equals("VALID")) {
-                return passwordValidation;
-            }
-
-            User user = new User();
-            user.setFullName(request.getFullName().trim());
-            user.setMobileNumber(request.getMobileNumber().trim());
-            user.setEmail(request.getEmail().toLowerCase().trim());
-            user.setPassword(passwordEncoder.encode(request.getPassword()));
-
             User savedUser = userRepository.save(user);
 
+            // Fire-and-forget welcome email
             CompletableFuture<Boolean> emailResult = asyncEmailService.sendUserWelcomeEmailAsync(
                     savedUser.getEmail(), savedUser.getFullName());
-
             emailResult.whenComplete((success, throwable) -> {
                 if (success) {
                     log.info("✅ Welcome email sent to new user: {}", savedUser.getEmail());
@@ -85,325 +93,88 @@ public class AuthService {
             });
 
             log.info("✅ User registered successfully: {}", savedUser.getEmail());
-            return "User registered successfully";
-
+            return savedUser.getId();
+        } catch (DuplicateKeyException dk) {
+            // In case unique index race occurs
+            log.warn("Duplicate key on register for email/mobile: {}", dk.getMessage());
+            throw new ResourceConflictException("Email or mobile already registered");
         } catch (Exception e) {
-            log.error("❌ Error during user registration for email {}: {}", request.getEmail(), e.getMessage());
-            return "Registration failed. Please try again.";
+            log.error("❌ Error during user registration for email {}: {}", email, e.getMessage(), e);
+            throw new RuntimeException("Registration failed. Please try again.");
         }
     }
 
-    // ================================
-    // USER LOGIN
-    // ================================
-
-    public AuthResponse login(String email, String password) {
-        try {
-            log.info("Login attempt for email: {}", email);
-
-            User user = userRepository.findByEmail(email.toLowerCase().trim())
-                    .orElseThrow(() -> new RuntimeException("Invalid email or password"));
-
-            if (isAccountLocked(user)) {
-                long remainingLockTime = getRemainingLockTime(user);
-                throw new RuntimeException(String.format(
-                        "Account is temporarily locked due to multiple failed login attempts. Please try again in %d minutes.",
-                        remainingLockTime));
-            }
-
-            if (!user.isActive()) {
-                throw new RuntimeException("Account is deactivated. Please contact support.");
-            }
-
-            if (!passwordEncoder.matches(password, user.getPassword())) {
-                handleFailedLoginAttempt(user);
-                throw new RuntimeException("Invalid email or password");
-            }
-
-            // Reset failed login attempts on successful login
-            if (user.getFailedLoginAttempts() > 0) {
-                user.resetFailedLoginAttempts(); // Use the method from User entity
-                userRepository.save(user);
-            }
-
-            // Update last login
-            user.updateLastLogin(); // Use the method from User entity
-            userRepository.save(user);
-
-            String userRole = determineUserRole(user);
-            String accessToken = jwtUtil.generateAccessToken(email, userRole);
-            String refreshToken = jwtUtil.generateRefreshToken(email);
-
-            // Store refresh token with user type
-            updateRefreshToken(email, refreshToken, userRole);
-
-            log.info("✅ User logged in successfully: {}", email);
-            return new AuthResponse(accessToken, refreshToken);
-
-        } catch (RuntimeException e) {
-            log.warn("❌ Login failed for email {}: {}", email, e.getMessage());
-            throw e;
-        } catch (Exception e) {
-            log.error("❌ Unexpected error during login for email {}: {}", email, e.getMessage());
-            throw new RuntimeException("Login failed. Please try again.");
-        }
-    }
+    // ❌ REMOVED: login() - NOW IN UnifiedAuthService
+    // ❌ REMOVED: updateRefreshToken() - NOW IN UnifiedAuthService
+    // ❌ REMOVED: refreshAccessToken() - NOW IN UnifiedAuthService
+    // ❌ REMOVED: logout() - NOW IN UnifiedAuthService
+    // ❌ REMOVED: logoutFromAllDevices() - NOW IN UnifiedAuthService
+    // ❌ REMOVED: handleFailedLoginAttempt() - NOW IN UnifiedAuthService
+    // ❌ REMOVED: isAccountLocked() - NOW IN UnifiedAuthService
 
     // ================================
-    // TOKEN MANAGEMENT (UPDATED)
+    // UTILITY METHODS (KEEP AS-IS)
     // ================================
-
-    /**
-     * Update refresh token with user type support
-     */
-    public void updateRefreshToken(String email, String newRefreshToken, String userType) {
-        try {
-            log.debug("Updating refresh token for email: {} with type: {}", email, userType);
-
-            // Delete old refresh tokens for this user and type using compatible method
-            List<RefreshToken> existingTokens = refreshTokenRepository.findByEmailAndUserType(email, userType);
-            if (!existingTokens.isEmpty()) {
-                refreshTokenRepository.deleteAll(existingTokens);
-            }
-
-            // Create and save new refresh token with user type
-            RefreshToken refreshTokenEntity = new RefreshToken(email, newRefreshToken, userType);
-            refreshTokenRepository.save(refreshTokenEntity);
-
-            log.debug("✅ Refresh token updated successfully for email: {} type: {}", email, userType);
-
-        } catch (Exception e) {
-            log.error("❌ Failed to update refresh token for email {} type {}: {}", email, userType, e.getMessage());
-            throw new RuntimeException("Failed to update refresh token: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Backward compatibility method
-     */
-    public void updateRefreshToken(String email, String newRefreshToken) {
-        updateRefreshToken(email, newRefreshToken, "USER");
-    }
-
-    public AuthResponse refreshAccessToken(String refreshToken) {
-        try {
-            log.debug("Refresh token request received");
-
-            if (!jwtUtil.isTokenValid(refreshToken)) {
-                throw new RuntimeException("Invalid or expired refresh token");
-            }
-
-            if (!jwtUtil.validateRefreshToken(refreshToken)) {
-                throw new RuntimeException("Invalid token type. Refresh token expected.");
-            }
-
-            String email = jwtUtil.extractUsername(refreshToken);
-
-            RefreshToken storedToken = refreshTokenRepository.findByToken(refreshToken)
-                    .orElseThrow(() -> new RuntimeException("Refresh token not found in database"));
-
-            if (!storedToken.getEmail().equals(email)) {
-                throw new RuntimeException("Token email mismatch");
-            }
-
-            User user = userRepository.findByEmail(email)
-                    .orElseThrow(() -> new RuntimeException("User not found"));
-
-            if (!user.isActive()) {
-                throw new RuntimeException("User account is deactivated");
-            }
-
-            String userRole = determineUserRole(user);
-            String newAccessToken = jwtUtil.generateAccessToken(email, userRole);
-            String newRefreshToken = jwtUtil.generateRefreshToken(email);
-
-            // Update refresh token with user type
-            updateRefreshToken(email, newRefreshToken, userRole);
-
-            log.info("✅ Tokens refreshed successfully for email: {}", email);
-            return new AuthResponse(newAccessToken, newRefreshToken);
-
-        } catch (RuntimeException e) {
-            log.warn("❌ Token refresh failed: {}", e.getMessage());
-            throw e;
-        } catch (Exception e) {
-            log.error("❌ Unexpected error during token refresh: {}", e.getMessage());
-            throw new RuntimeException("Token refresh failed. Please login again.");
-        }
-    }
-
-    // ================================
-    // LOGOUT & SECURITY (✅ FIXED)
-    // ================================
-
-    /**
-     * Logout user by user type
-     */
-    public void logout(String email, String userType) {
-        try {
-            // Delete refresh tokens using compatible approach
-            List<RefreshToken> tokensToDelete = refreshTokenRepository.findByEmailAndUserType(email, userType);
-            if (!tokensToDelete.isEmpty()) {
-                refreshTokenRepository.deleteAll(tokensToDelete);
-            }
-
-            log.info("✅ User logged out successfully: {} type: {}", email, userType);
-        } catch (Exception e) {
-            log.error("❌ Error during logout for email {} type {}: {}", email, userType, e.getMessage());
-        }
-    }
-
-    /**
-     * Backward compatibility method
-     */
-    public void logout(String email) {
-        logout(email, "USER");
-    }
-
-    /**
-     * ✅ FIXED: Logout user from all devices and all types
-     */
-    public void logoutFromAllDevices(String email) {
-        try {
-            // Delete all refresh tokens for this user using compatible approach
-            List<RefreshToken> tokensToDelete = refreshTokenRepository.findByEmail(email);
-            if (!tokensToDelete.isEmpty()) {
-                refreshTokenRepository.deleteAll(tokensToDelete);
-            }
-
-            // ✅ FIXED: Simply update the updated_at timestamp instead of global logout
-            User user = userRepository.findByEmail(email).orElse(null);
-            if (user != null) {
-                user.setUpdatedAt(LocalDateTime.now()); // Use existing field
-                userRepository.save(user);
-                log.debug("Updated timestamp for user logout from all devices: {}", email);
-            }
-
-            log.info("✅ User logged out from all devices: {}", email);
-        } catch (Exception e) {
-            log.error("❌ Error during logout from all devices for email {}: {}", email, e.getMessage());
-        }
-    }
-
-    // ================================
-    // UTILITY METHODS (ENHANCED)
-    // ================================
-
-    private void handleFailedLoginAttempt(User user) {
-        try {
-            // Use the method from User entity if available, otherwise manual
-            try {
-                user.recordFailedLogin(); // Use User entity method
-            } catch (Exception e) {
-                // Fallback to manual increment
-                user.setFailedLoginAttempts(user.getFailedLoginAttempts() + 1);
-                user.setLastFailedLoginAt(LocalDateTime.now());
-            }
-
-            if (user.getFailedLoginAttempts() >= maxLoginAttempts) {
-                log.warn("⚠️ Account locked due to {} failed login attempts: {}",
-                        maxLoginAttempts, user.getEmail());
-            }
-
-            userRepository.save(user);
-
-        } catch (Exception e) {
-            log.error("Error handling failed login attempt for user {}: {}", user.getEmail(), e.getMessage());
-        }
-    }
-
-    private boolean isAccountLocked(User user) {
-        // Check if User entity has isAccountLocked method
-        try {
-            return user.isAccountLocked(); // Use User entity method if available
-        } catch (Exception e) {
-            // Fallback to manual check
-            if (user.getFailedLoginAttempts() < maxLoginAttempts) {
-                return false;
-            }
-
-            if (user.getLastFailedLoginAt() == null) {
-                return false;
-            }
-
-            LocalDateTime lockoutEnd = user.getLastFailedLoginAt().plusMinutes(accountLockoutMinutes);
-            return LocalDateTime.now().isBefore(lockoutEnd);
-        }
-    }
-
     private long getRemainingLockTime(User user) {
-        if (user.getLastFailedLoginAt() == null) {
-            return 0;
-        }
-
+        if (user.getLastFailedLoginAt() == null) return 0;
         LocalDateTime lockoutEnd = user.getLastFailedLoginAt().plusMinutes(accountLockoutMinutes);
         LocalDateTime now = LocalDateTime.now();
-
-        if (now.isAfter(lockoutEnd)) {
-            return 0;
-        }
-
+        if (now.isAfter(lockoutEnd)) return 0;
         return java.time.Duration.between(now, lockoutEnd).toMinutes() + 1;
     }
 
     private String determineUserRole(User user) {
-        return defaultUserRole; // "USER" by default
+        return defaultUserRole;
     }
 
     private String validatePassword(String password) {
         if (password == null || password.length() < 6) {
             return "Password must be at least 6 characters long";
         }
-
         if (password.length() > 100) {
             return "Password cannot exceed 100 characters";
         }
-
         return "VALID";
     }
 
     // ================================
-    // USER MANAGEMENT (ENHANCED)
+    // USER MANAGEMENT (KEEP AS-IS)
     // ================================
-
     public User getUserByEmail(String email) {
+        if (email == null || email.trim().isEmpty()) {
+            throw new BadRequestException("Email is required");
+        }
         return userRepository.findByEmail(email.toLowerCase().trim())
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new NotFoundException("User not found"));
     }
 
     public boolean userExists(String email) {
+        if (email == null) return false;
         return userRepository.findByEmail(email.toLowerCase().trim()).isPresent();
     }
 
-    public String updatePassword(String email, String newPassword) {
+    public void updatePassword(String email, String newPassword) {
+        if (email == null || newPassword == null) {
+            throw new BadRequestException("Email and new password required");
+        }
+
+        User user = getUserByEmail(email);
+        String passwordValidation = validatePassword(newPassword);
+        if (!"VALID".equals(passwordValidation)) {
+            throw new BadRequestException(passwordValidation);
+        }
+
         try {
-            User user = getUserByEmail(email);
-
-            String passwordValidation = validatePassword(newPassword);
-            if (!passwordValidation.equals("VALID")) {
-                return passwordValidation;
-            }
-
-            // Use User entity method if available, otherwise manual
-            try {
-                user.updatePassword(passwordEncoder.encode(newPassword)); // Use User entity method
-            } catch (Exception e) {
-                // Fallback to manual update
-                user.setPassword(passwordEncoder.encode(newPassword));
-                user.setPasswordUpdatedAt(LocalDateTime.now());
-            }
-
+            user.updatePassword(passwordEncoder.encode(newPassword));
             userRepository.save(user);
 
-            // Logout from all devices after password change
-            logoutFromAllDevices(email);
+            // ✅ Call UnifiedAuthService for logout (no duplication)
+            unifiedAuthService.logoutFromAllDevices(email);
 
             log.info("✅ Password updated successfully for user: {}", email);
-            return "Password updated successfully";
-
         } catch (Exception e) {
-            log.error("❌ Error updating password for user {}: {}", email, e.getMessage());
-            return "Failed to update password. Please try again.";
+            log.error("❌ Error updating password for user {}: {}", email, e.getMessage(), e);
+            throw new RuntimeException("Failed to update password. Please try again.");
         }
     }
 
@@ -411,40 +182,34 @@ public class AuthService {
         try {
             long totalUsers = userRepository.count();
 
-            // Calculate active users manually if repository method doesn't exist
-            long activeUsers = 0;
-            long lockedUsers = 0;
-
+            long activeUsers;
             try {
                 activeUsers = userRepository.countByIsActiveTrue();
             } catch (Exception e) {
-                // Fallback: count manually
                 activeUsers = userRepository.findAll().stream()
-                        .mapToLong(user -> user.isActive() ? 1L : 0L)
+                        .mapToLong(u -> u.isActive() ? 1L : 0L)
                         .sum();
             }
 
+            long lockedUsers;
             try {
                 lockedUsers = userRepository.countByFailedLoginAttemptsGreaterThanEqual(maxLoginAttempts);
             } catch (Exception e) {
-                // Fallback: count manually
                 lockedUsers = userRepository.findAll().stream()
-                        .mapToLong(user -> user.getFailedLoginAttempts() >= maxLoginAttempts ? 1L : 0L)
+                        .mapToLong(u -> u.getFailedLoginAttempts() >= maxLoginAttempts ? 1L : 0L)
                         .sum();
             }
 
             return new AuthServiceStats(totalUsers, activeUsers, lockedUsers, maxLoginAttempts);
-
         } catch (Exception e) {
-            log.error("Error getting auth stats: {}", e.getMessage());
+            log.error("Error getting auth stats: {}", e.getMessage(), e);
             return new AuthServiceStats(0, 0, 0, maxLoginAttempts);
         }
     }
 
     // ================================
-    // INNER CLASSES
+    // INNER CLASSES (KEEP AS-IS)
     // ================================
-
     public static class AuthServiceStats {
         private final long totalUsers;
         private final long activeUsers;

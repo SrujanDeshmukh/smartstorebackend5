@@ -37,7 +37,12 @@
 			<version>4.12.0</version>
 		</dependency>
 
-		<!-- Keep existing Spring Boot Mail -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!-- Keep existing Spring Boot Mail -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-mail</artifactId>
