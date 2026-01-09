@@ -29,8 +29,9 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .authorizeHttpRequests(auth -> auth
-                        // ✅ PUBLIC ENDPOINTS
+                        // ✅ PUBLIC ENDPOINTS (NO AUTHENTICATION REQUIRED)
                         .requestMatchers(
+                                // Auth endpoints
                                 "/auth/register",
                                 "/auth/user/**",
                                 "/vendor/register",
@@ -38,21 +39,38 @@ public class SecurityConfig {
                                 "/unified-auth/login",
                                 "/unified-auth/refresh",
                                 "/unified-auth/status",
+
+                                // OTP endpoints
                                 "/otp/**",
+
+                                // ✅ NEW - User public endpoints (Krishna's app)
+                                "/api/user/**",              // All user endpoints
+                                "/api/auth/**",              // Auth endpoints with /api prefix
+
+                                // Other public endpoints
                                 "/public/**",
                                 "/health",
                                 "/error"
                         ).permitAll()
 
-                        // ✅ PROTECTED ENDPOINTS (AUTHENTICATION MANDATORY)
+                        // ✅ PROTECTED ENDPOINTS (AUTHENTICATION REQUIRED)
                         .requestMatchers(
+                                // Auth logout
                                 "/auth/logout",
                                 "/auth/refresh",
+
+                                // Vendor endpoints
                                 "/vendor/profile/**",
-                                "/vendor/upi",           // 🔒 AUTHENTICATION REQUIRED
+                                "/vendor/upi",
                                 "/vendor/logout",
+                                "/api/vendor/**",            // Vendor API endpoints
+
+                                // Unified auth
                                 "/unified-auth/logout",
-                                "/unified-auth/logout-all"
+                                "/unified-auth/logout-all",
+
+                                // Admin endpoints
+                                "/api/admin/**"
                         ).authenticated()
 
                         .anyRequest().authenticated()
@@ -102,6 +120,4 @@ public class SecurityConfig {
     public AuthenticationManager authenticationManager(AuthenticationConfiguration authConfig) throws Exception {
         return authConfig.getAuthenticationManager();
     }
-
-    // ❌ REMOVED: PasswordEncoder bean (already exists in PasswordConfig.java)
 }

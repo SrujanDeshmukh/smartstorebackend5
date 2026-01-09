@@ -3,6 +3,7 @@ package com.raghunath.smartstore.service;
 import com.raghunath.smartstore.dto.vendor.VendorRegisterRequest;
 import com.raghunath.smartstore.dto.vendor.UpdateVendorProfileRequest;
 import com.raghunath.smartstore.entity.Vendor;
+import com.raghunath.smartstore.exception.NotFoundException;
 import com.raghunath.smartstore.repository.VendorRepository;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -171,6 +172,11 @@ public class VendorService {
     public Vendor getVendorByEmail(String email) {
         return vendorRepository.findByEmail(email.toLowerCase().trim())
                 .orElseThrow(() -> new RuntimeException("Vendor not found"));
+    }
+
+    public Vendor getVendorById(String vendorId){
+        return vendorRepository.findById(vendorId)
+                .orElseThrow(() -> new NotFoundException("Vendor not found"));
     }
 
     public boolean vendorExists(String email) {

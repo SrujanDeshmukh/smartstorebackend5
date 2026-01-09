@@ -45,6 +45,10 @@ public class User {
     @NotBlank(message = "Password is required")
     private String password; // This will be bcrypt encoded
 
+    @Indexed
+    @NotBlank
+    private String location;
+
     // ✅ REMOVED: refreshToken field (now uses separate RefreshToken collection)
     // private String refreshToken; // ❌ REMOVED - using separate collection now
 

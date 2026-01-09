@@ -44,6 +44,7 @@ public class AuthService {
 
         String email = request.getEmail() == null ? null : request.getEmail().toLowerCase().trim();
         String mobile = request.getMobileNumber() == null ? null : request.getMobileNumber().trim();
+        String location = request.getLocation() == null ? null : request.getLocation().trim();
 
         // Basic validations
         if (email == null || email.isEmpty()) {
@@ -51,6 +52,9 @@ public class AuthService {
         }
         if (mobile == null || mobile.isEmpty()) {
             throw new BadRequestException("Mobile number is required");
+        }
+        if(location == null || location.isEmpty()){
+            throw new BadRequestException("Location is required");
         }
         if (request.getPassword() == null || request.getConfirmPassword() == null ||
                 !request.getPassword().equals(request.getConfirmPassword())) {
@@ -76,6 +80,7 @@ public class AuthService {
         user.setFullName(request.getFullName() == null ? null : request.getFullName().trim());
         user.setMobileNumber(mobile);
         user.setEmail(email);
+        user.setLocation(location);
         user.setPassword(passwordEncoder.encode(request.getPassword()));
 
         try {

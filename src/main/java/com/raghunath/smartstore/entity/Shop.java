@@ -4,6 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
+import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.LocalDateTime;
@@ -27,18 +28,26 @@ public class Shop {
     @NotBlank(message = "Shop address is required")
     private String shopAddress;
 
+    @Indexed
+    @NotBlank
+    private String city;
+
     private String shopType; // grocery, pharmacy, electronics, etc.
     private String contactNumber;
     private String description;
     private String gstNumber;
-
     private Double latitude;
     private Double longitude;
 
     private Boolean isActive = true;
+
+    private Boolean isApproved = false;
     private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
 
     public Shop() {
+        this.isActive = true;
+        this.isApproved = false;
         this.createdAt = LocalDateTime.now();
     }
 }

@@ -11,6 +11,9 @@ public class ShopRequest {
     @NotBlank(message = "Shop address is required")
     private String shopAddress;
 
+    @NotBlank(message = "City is required")
+    private String city;
+
     private String shopType;
     private String contactNumber;
     private String description;
