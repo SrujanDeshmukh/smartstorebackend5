@@ -37,7 +37,7 @@ public class EmployeeService {
             Vendor vendor = vendorService.getVendorByEmail(vendorEmail);
 
             // ✅ Step 2: Validate shop belongs to vendor
-            shopService.getShopById(shopId);
+            shopService.getShopDetailsById(shopId);
 
             // ✅ Step 3: Check if email already exists
             if (employeeRepository.existsByEmail(request.getEmail())) {

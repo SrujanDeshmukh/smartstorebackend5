@@ -31,7 +31,7 @@ public class Product {
     private Double price;
 
     @NotNull(message = "Discount is required")
-    private Integer discount;
+    private Double discount;
 
     @NotBlank(message = "Brand is required")
     private String brand;

@@ -22,6 +22,8 @@ public class ShopResponse {
     private Double latitude;
     private Double longitude;
 
+    private String bannerUrl;
+
     // Business hours
     private String openingTime;
     private String closingTime;

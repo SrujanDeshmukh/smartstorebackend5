@@ -5,7 +5,9 @@ import com.raghunath.smartstore.entity.Advertisement;
 import com.raghunath.smartstore.entity.Product;
 import com.raghunath.smartstore.entity.Shop;
 import com.raghunath.smartstore.entity.Vendor;
+import com.raghunath.smartstore.exception.NotFoundException;
 import com.raghunath.smartstore.repository.AdvertisementRepository;
+import com.raghunath.smartstore.repository.ShopRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -22,6 +24,7 @@ public class AdvertisementService {
     private final VendorService vendorService;
     private final ShopService shopService;
     private final ProductService productService;
+    private final ShopRepository shopRepository;
 
     /**
      * CREATE ADVERTISEMENT
@@ -32,7 +35,8 @@ public class AdvertisementService {
 
             // Validate vendor and shop
             Vendor vendor = vendorService.getVendorByEmail(vendorEmail);
-            Shop shop = shopService.getShopById(shopId);
+            Shop shop = shopRepository.findById(shopId)
+                    .orElseThrow(() -> new NotFoundException("Shop not found"));
 
             if (!shop.getVendorId().equals(vendor.getId())) {
                 throw new IllegalArgumentException("Shop does not belong to this vendor");
@@ -98,7 +102,8 @@ public class AdvertisementService {
     public List<Advertisement> getShopAdvertisements(String vendorEmail, String shopId) {
         try {
             Vendor vendor = vendorService.getVendorByEmail(vendorEmail);
-            Shop shop = shopService.getShopById(shopId);
+            Shop shop = shopRepository.findById(shopId)
+                    .orElseThrow(() -> new NotFoundException("Shop not found"));
 
             if (!shop.getVendorId().equals(vendor.getId())) {
                 throw new IllegalArgumentException("Shop does not belong to this vendor");
@@ -111,6 +116,15 @@ public class AdvertisementService {
             throw new RuntimeException("Failed to retrieve advertisements", e);
         }
     }
+
+    /**
+     * Get Shop ENTITY (for internal service use only - NOT for API responses)
+     */
+    public Shop getShopEntityById(String shopId) {
+        return shopRepository.findById(shopId)
+                .orElseThrow(() -> new NotFoundException("Shop not found"));
+    }
+
 
     /**
      * GET SINGLE ADVERTISEMENT BY ID

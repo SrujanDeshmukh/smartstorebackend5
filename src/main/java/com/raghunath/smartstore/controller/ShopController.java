@@ -1,6 +1,7 @@
 package com.raghunath.smartstore.controller;
 
 import com.raghunath.smartstore.dto.ShopRequest;
+import com.raghunath.smartstore.dto.ShopResponse;
 import com.raghunath.smartstore.entity.Shop;
 import com.raghunath.smartstore.security.JwtUtil;
 import com.raghunath.smartstore.service.ShopService;
@@ -10,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/vendor/shops")
@@ -37,16 +39,21 @@ public class ShopController {
     }
 
     @GetMapping
-    public ResponseEntity<List<Shop>> getVendorShops(@RequestHeader("Authorization") String token) {
+    public ResponseEntity<List<ShopResponse>> getVendorShops(@RequestHeader("Authorization") String token) {
         String actualToken = token.startsWith("Bearer ") ? token.substring(7) : token;
         String email = jwtUtil.extractUsername(actualToken);
 
-        return ResponseEntity.ok(shopService.getVendorShops(email));
+        List<Shop> shops =  shopService.getVendorShops(email);
+        List<ShopResponse> responses = shops.stream()
+                .map(shop -> shopService.convertToShopResponse(shop, false))
+                .collect(Collectors.toList());
+
+        return ResponseEntity.ok(responses);
     }
 
     @GetMapping("/{shopId}")
-    public ResponseEntity<Shop> getShop(@PathVariable String shopId) {
-        return ResponseEntity.ok(shopService.getShopById(shopId));
+    public ResponseEntity<ShopResponse> getShop(@PathVariable String shopId) {
+        return ResponseEntity.ok(shopService.getShopDetailsById(shopId));
     }
 
     @PutMapping("/{shopId}")

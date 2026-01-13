@@ -42,20 +42,20 @@ public class ProductController {
         return ResponseEntity.ok(productService.getShopProducts(shopId));
     }
 
-    @GetMapping
-    public ResponseEntity<List<Product>> getVendorProducts(@RequestHeader("Authorization") String token) {
-        String actualToken = token.startsWith("Bearer ") ? token.substring(7) : token;
-        String email = jwtUtil.extractUsername(actualToken);
+//    @GetMapping
+//    public ResponseEntity<List<Product>> getVendorProducts(@RequestHeader("Authorization") String token) {
+//        String actualToken = token.startsWith("Bearer ") ? token.substring(7) : token;
+//        String email = jwtUtil.extractUsername(actualToken);
+//
+//        return ResponseEntity.ok(productService.getVendorProducts(email));
+//    }
 
-        return ResponseEntity.ok(productService.getVendorProducts(email));
-    }
-
-    @GetMapping("/{productId}")
+    @GetMapping("/shop/{productId}")
     public ResponseEntity<Product> getProduct(@PathVariable String productId) {
         return ResponseEntity.ok(productService.getProductById(productId));
     }
 
-    @PutMapping("/{productId}")
+    @PutMapping("/shop/{productId}")
     public ResponseEntity<String> updateProduct(
             @PathVariable String productId,
             @Valid @RequestBody ProductRequest request) {
@@ -64,7 +64,7 @@ public class ProductController {
     }
 
     // some updates
-    @DeleteMapping("/{productId}")
+    @DeleteMapping("/shop/{productId}")
     public ResponseEntity<String> deleteProduct(@PathVariable String productId) {
         return ResponseEntity.ok(productService.deleteProduct(productId));
     }
