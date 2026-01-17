@@ -1,5 +1,6 @@
 package com.raghunath.smartstore.service;
 
+import com.raghunath.smartstore.dto.ShopListProjection;
 import com.raghunath.smartstore.dto.ShopRequest;
 import com.raghunath.smartstore.dto.ShopResponse;
 import com.raghunath.smartstore.entity.Shop;
@@ -98,11 +99,12 @@ public class ShopService {
     /**
      * Get shops by city - LIST VIEW ✅ SINGLE DTO with conditional fields
      */
-    public List<ShopResponse> getShopsByCity(String city) {
+    public List<ShopListProjection> getShopsByCity(String city) {
         List<Shop> shops = shopRepository.findByCityAndIsActiveTrue(city);
-        return shops.stream()
-                .map(shop -> convertToShopResponse(shop, true))  // ✅ includeBanner=true
-                .collect(Collectors.toList());
+        return shopRepository.findByCityProjection(city);
+//        return shops.stream()
+//                .map(shop -> convertToShopResponse(shop, true))  // ✅ includeBanner=true
+//                .collect(Collectors.toList());
     }
 
     /**
