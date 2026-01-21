@@ -34,6 +34,8 @@ public class SecurityConfig {
                                 // Auth endpoints
                                 "/auth/register",
                                 "/auth/user/**",
+                                "/auth/update-address",
+                                "/auth/shops/**",
                                 "/vendor/register",
                                 "/vendor/login",
                                 "/unified-auth/login",

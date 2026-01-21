@@ -1,6 +1,7 @@
 package com.raghunath.smartstore.service;
 
 import com.raghunath.smartstore.dto.auth.AuthResponse;
+import com.raghunath.smartstore.dto.auth.UserLoginProfile;
 import com.raghunath.smartstore.entity.RefreshToken;
 import com.raghunath.smartstore.entity.User;
 import com.raghunath.smartstore.entity.Vendor;
@@ -104,7 +105,10 @@ public class UnifiedAuthService {
         rotateRefreshToken(user.getEmail(), refreshToken, "USER");
 
         log.info("✅ User login successful: {}", email);
-        return new AuthResponse(accessToken, refreshToken, "USER", user, user.getId());
+
+        UserLoginProfile profile = new UserLoginProfile(user);
+
+        return new AuthResponse(accessToken, refreshToken, "USER", profile);
     }
 
     // ================================
@@ -144,7 +148,7 @@ public class UnifiedAuthService {
         rotateRefreshToken(vendor.getEmail(), refreshToken, "VENDOR");
 
         log.info("✅ Vendor login successful: {}", email);
-        return new AuthResponse(accessToken, refreshToken, "VENDOR", vendor, vendor.getId());
+        return new AuthResponse(accessToken, refreshToken, "VENDOR", vendor);
     }
 
     // ================================
@@ -179,7 +183,7 @@ public class UnifiedAuthService {
         rotateRefreshToken(employee.getEmail(), refreshToken, "EMPLOYEE");
 
         log.info("✅ Employee login successful: {}", email);
-        return new AuthResponse(accessToken, refreshToken, "EMPLOYEE", employee, employee.getId());
+        return new AuthResponse(accessToken, refreshToken, "EMPLOYEE", employee);
     }
 
     // ================================

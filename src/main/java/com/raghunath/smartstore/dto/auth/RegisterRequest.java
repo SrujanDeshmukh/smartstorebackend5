@@ -19,8 +19,8 @@ public class RegisterRequest {
     @NotBlank(message = "Email is required")
     private String email;
 
-    @NotBlank(message = "Location is required")
-    private String location;
+    @NotBlank(message = "City is required")
+    private String city;
 
     @Size(min = 6, message = "Password must be at least 6 characters")
     private String password;

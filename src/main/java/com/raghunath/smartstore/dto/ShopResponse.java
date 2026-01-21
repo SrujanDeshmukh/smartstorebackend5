@@ -8,38 +8,28 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @NoArgsConstructor
 public class ShopResponse {
-
     private String shopId;
     private String shopName;
     private String description;
     private String city;
     private String address;
     private String phone;
-    private String email;
     private String shopType;
     private String gstNumber;
-
     private Double latitude;
     private Double longitude;
-
-    private String bannerUrl;
-
-    // Business hours
+    private String email;
+    private Boolean isOpen;
     private String openingTime;
     private String closingTime;
-
-    // Status
-    private Boolean isOpen;
-    private Boolean isActive;
+    private Integer totalProducts;
+    private Double rating;
+    private String bannerUrl;
     private Boolean isApproved;
 
-    // Vendor info
+    // ✅ VENDOR FIELDS (for detail view - optional null)
     private String vendorName;
     private String vendorId;
     private String vendorEmail;
     private String vendorPhone;
-
-    // Stats
-    private Integer totalProducts;
-    private Double rating;
 }

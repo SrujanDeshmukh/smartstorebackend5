@@ -1,20 +1,35 @@
 package com.raghunath.smartstore.service;
 
+import com.raghunath.smartstore.dto.FeaturedShopResponse;
+import com.raghunath.smartstore.dto.ShopResponse;
+import com.raghunath.smartstore.dto.auth.AuthResponse;
 import com.raghunath.smartstore.dto.auth.RegisterRequest;
+import com.raghunath.smartstore.dto.auth.RegisterResponse;
+import com.raghunath.smartstore.dto.auth.UserLoginProfile;
+import com.raghunath.smartstore.entity.Shop;
 import com.raghunath.smartstore.entity.User;
 import com.raghunath.smartstore.exception.BadRequestException;
 import com.raghunath.smartstore.exception.NotFoundException;
 import com.raghunath.smartstore.exception.ResourceConflictException;
+import com.raghunath.smartstore.exception.UnauthorizedException;
+import com.raghunath.smartstore.repository.ShopRepository;
 import com.raghunath.smartstore.repository.UserRepository;
+import com.raghunath.smartstore.security.JwtUtil;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 @Slf4j
@@ -26,6 +41,9 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final AsyncEmailService asyncEmailService;
     private final UnifiedAuthService unifiedAuthService;  // ✅ For calling logout after password change
+    private final JwtUtil jwtUtil;
+    @Value("${jwt.secret}")
+    private String jwtSecret;
 
     @Value("${app.user.default.role:USER}")
     private String defaultUserRole;
@@ -36,15 +54,17 @@ public class AuthService {
     @Value("${app.account.lockout.minutes:30}")
     private int accountLockoutMinutes;
 
+    private final ShopRepository shopRepository;
+
     // ================================
     // USER REGISTRATION (KEEP AS-IS)
     // ================================
-    public String register(@Valid RegisterRequest request) {
+    public RegisterResponse register(@Valid RegisterRequest request) {
         log.info("User registration attempt for email: {}", request.getEmail());
 
         String email = request.getEmail() == null ? null : request.getEmail().toLowerCase().trim();
         String mobile = request.getMobileNumber() == null ? null : request.getMobileNumber().trim();
-        String location = request.getLocation() == null ? null : request.getLocation().trim();
+        String city = request.getCity() == null ? null : request.getCity().trim();
 
         // Basic validations
         if (email == null || email.isEmpty()) {
@@ -53,8 +73,8 @@ public class AuthService {
         if (mobile == null || mobile.isEmpty()) {
             throw new BadRequestException("Mobile number is required");
         }
-        if(location == null || location.isEmpty()){
-            throw new BadRequestException("Location is required");
+        if(city == null || city.isEmpty()){
+            throw new BadRequestException("City is required");
         }
         if (request.getPassword() == null || request.getConfirmPassword() == null ||
                 !request.getPassword().equals(request.getConfirmPassword())) {
@@ -80,7 +100,7 @@ public class AuthService {
         user.setFullName(request.getFullName() == null ? null : request.getFullName().trim());
         user.setMobileNumber(mobile);
         user.setEmail(email);
-        user.setLocation(location);
+        user.setCity(city);
         user.setPassword(passwordEncoder.encode(request.getPassword()));
 
         try {
@@ -89,16 +109,8 @@ public class AuthService {
             // Fire-and-forget welcome email
             CompletableFuture<Boolean> emailResult = asyncEmailService.sendUserWelcomeEmailAsync(
                     savedUser.getEmail(), savedUser.getFullName());
-            emailResult.whenComplete((success, throwable) -> {
-                if (success) {
-                    log.info("✅ Welcome email sent to new user: {}", savedUser.getEmail());
-                } else {
-                    log.warn("⚠️ Failed to send welcome email to: {}", savedUser.getEmail());
-                }
-            });
-
             log.info("✅ User registered successfully: {}", savedUser.getEmail());
-            return savedUser.getId();
+            return new RegisterResponse(true, "Registration Successsful", savedUser.getId(), savedUser.getCity());
         } catch (DuplicateKeyException dk) {
             // In case unique index race occurs
             log.warn("Duplicate key on register for email/mobile: {}", dk.getMessage());
@@ -128,6 +140,64 @@ public class AuthService {
         return java.time.Duration.between(now, lockoutEnd).toMinutes() + 1;
     }
 
+    @Autowired
+    private final ShopService shopService;  // ✅ Your existing service
+
+    public List<FeaturedShopResponse> getFeaturedShops(String city) {
+        log.info("Getting featured shops for city: {}", city);
+
+        // ✅ YOUR HARDCODED SHOP IDs
+        String shopId1 = switch (city.toLowerCase()) {
+            case "akola" -> "696173b13cfe40283ade591b";
+            case "murtizapur" -> "696173b13cfe40283ade591b";
+            case "karanja" -> "696173da3cfe40283ade591c";
+            case "amravati" -> "696173da3cfe40283ade591c";
+            default -> null;
+        };
+
+        String shopId2 = switch (city.toLowerCase()) {
+            case "akola" -> "696173da3cfe40283ade591c";
+            case "murtizapur" -> "696173da3cfe40283ade591c";
+            case "karanja" -> "696173b13cfe40283ade591b";
+            case "amravati" -> "696173b13cfe40283ade591b";
+            default -> null;
+        };
+
+        if (shopId1 == null || shopId2 == null) {
+            throw new NotFoundException("No featured shops for city: " + city);
+        }
+
+        // ✅ FETCH & MAP TO 9 FIELDS ONLY
+        Shop shop1 = shopRepository.findById(shopId1).orElseThrow();
+        Shop shop2 = shopRepository.findById(shopId2).orElseThrow();
+
+        FeaturedShopResponse shop1Resp = new FeaturedShopResponse(
+                shop1.getId(),
+                shop1.getShopName(),
+                shop1.getCity(),
+                shop1.getOpeningTime() != null ? shop1.getOpeningTime().toString() : null,
+                shop1.getClosingTime() != null ? shop1.getClosingTime().toString() : null,
+                0,  // totalProducts
+                shop1.getRating(),
+                shop1.getBannerUrl(),
+                shop1.getIsApproved()
+        );
+
+        FeaturedShopResponse shop2Resp = new FeaturedShopResponse(
+                shop2.getId(),
+                shop2.getShopName(),
+                shop2.getCity(),
+                shop2.getOpeningTime() != null ? shop2.getOpeningTime().toString() : null,
+                shop2.getClosingTime() != null ? shop2.getClosingTime().toString() : null,
+                0,  // totalProducts
+                shop2.getRating(),
+                shop2.getBannerUrl(),
+                shop2.getIsApproved()
+        );
+
+        return Arrays.asList(shop1Resp, shop2Resp);
+    }
+
     private String determineUserRole(User user) {
         return defaultUserRole;
     }
@@ -152,6 +222,84 @@ public class AuthService {
         return userRepository.findByEmail(email.toLowerCase().trim())
                 .orElseThrow(() -> new NotFoundException("User not found"));
     }
+
+    public AuthResponse getUserProfile(String accessToken) {
+        log.info("Getting profile for token: {}", accessToken.substring(0, 20) + "...");
+
+        try {
+            // ✅ DIRECT JWT PARSING (no jwtUtil needed)
+            String email = jwtUtil.extractUsername(accessToken);
+
+            if (email == null) {
+                throw new UnauthorizedException("Invalid token format");
+            }
+
+            // ✅ Find user by email (your existing repo method)
+            User user = userRepository.findByEmail(email)
+                    .orElseThrow(() -> new NotFoundException("User not found"));
+
+            // ✅ SAME UserLoginProfile as login (10 fields)
+            UserLoginProfile profile = new UserLoginProfile(user);
+
+            // ✅ SAME AuthResponse format as login
+            return new AuthResponse(accessToken, null, "USER", profile);
+
+        } catch (Exception e) {
+            log.error("Token validation failed: {}", e.getMessage());
+            throw new UnauthorizedException("Invalid or expired token");
+        }
+    }
+
+    // ✅ HELPER METHOD - Parses YOUR JWT format
+    private String extractEmailFromToken(String token) {
+        try {
+            // Remove Bearer prefix if present
+            if (token.startsWith("Bearer ")) {
+                token = token.substring(7);
+            }
+
+            // Parse JWT (io.jsonwebtoken)
+            Claims claims = Jwts.parser()
+                    .setSigningKey(jwtSecret)  // Your secret key
+                    .parseClaimsJws(token)
+                    .getBody();
+
+            return claims.getSubject();  // "raghunath@gmail.com"
+
+        } catch (Exception e) {
+            log.error("JWT parsing failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+
+    // Add this method to AuthService.java
+    public Map<String, Object> updateUserAddress(String userId, String address, String city) {
+        log.info("Updating address for user: {}", userId);
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found: " + userId));
+
+        // ✅ Update ONLY address + city
+        if (address != null && !address.trim().isEmpty()) {
+            user.setAddress(address.trim());
+        }
+        if (city != null && !city.trim().isEmpty()) {
+            user.setCity(city.trim());
+        }
+
+        user.setUpdatedAt(LocalDateTime.now());
+        userRepository.save(user);
+
+        log.info("✅ Address updated for user: {}", userId);
+
+        return Map.of(
+                "success", true,
+                "message", "Address updated successfully",
+                "city", user.getCity()
+        );
+    }
+
 
     public boolean userExists(String email) {
         if (email == null) return false;
