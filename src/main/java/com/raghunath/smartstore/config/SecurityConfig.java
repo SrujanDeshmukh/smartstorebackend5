@@ -32,6 +32,11 @@ public class SecurityConfig {
                         // ✅ PUBLIC ENDPOINTS (NO AUTHENTICATION REQUIRED)
                         .requestMatchers(
                                 // Auth endpoints
+                                "/auth/send-otp",
+                                "/auth/resend-otp",
+                                "/auth/verify-otp",
+                                "/auth/otp-status",
+                                "/auth/otp-stats",
                                 "/auth/register",
                                 "/auth/user/**",
                                 "/auth/update-address",
